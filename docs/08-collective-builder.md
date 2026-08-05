@@ -1,6 +1,105 @@
 ## 第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
 
-文件:`include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`(~10 个 partial specialization)。
+### 8.0 builder 不是一份——它是 33 份的 dispatcher
+
+`include/cutlass/gemm/collective/builders/` 下不是一份文件,而是 **33 份 `.inl`**。读 Ch8 之前先认清这张「地图」,否则会被文件名劝退,也不知道自己该读哪一份。
+
+#### 二维拆分:arch × feature
+
+每一份 builder 对应一个 (arch, feature) 组合。两个轴:
+
+**arch 轴(决定 mma atom 来源)**:
+
+| arch | 文件前缀 | mma atom 来源 | smem 上限 |
+|---|---|---|---|
+| **sm90**(Hopper)| `sm90_*` | `cute::GMMA::ss_op_selector<...>`(WGMMA,smem-smem) | `detail::sm90_smem_capacity_bytes` |
+| **sm100**(Blackwell)| `sm100_*` | `cute::UMMA::Major` + `tag_to_umma_major_A/B<...>`,atom 内联构造(Ch11)| sm100 smem 上限 |
+| **sm103**(Blackwell refresh)| `sm103_blockscaled_umma_builder.inl` | 同 sm100,但用 sm103 特有的指令 | 同 sm100 |
+| **sm120**(consumer Blackwell)| `sm120_*` | sm120 MMA atom(走 TMA,不是 cluster launch)| sm120 smem 上限 |
+
+**feature 轴(决定数据类型 / 数据通路)**:
+
+| feature | 后缀 | 加了什么 |
+|---|---|---|
+| **basic** | `_gmma_builder.inl` / `_umma_builder.inl` / `_mma_builder.inl` | 单纯 fp16 / bf16 / tf32 / fp32 GEMM |
+| **sparse** | `_sparse_gmma_builder.inl` / `_sparse_umma_builder.inl` / `_sparse_mma_builder.inl` | 2:4 结构化稀疏(atom 是 `ss_op_selector_sparse` 或对应 UMMA sparse)|
+| **blockscaled** | `_blockscaled_*_builder.inl` | NVFP4 / MXFP8 这类「每个 block 有自己的 scale」(atom 走 `compute_stage_count_with_blockwise_scale`,smem layout 多了 `SmemLayoutAtomSFA/B` 来放 per-block scale) |
+| **blockwise** | `_blockwise_umma_builder.inl` / `_blockwise_mma_builder.inl` | blockwise scaling(sm100 + sm120) |
+| **mixed_input** | `_mixed_input_umma_builder.inl` / `_mixed_tma_cpasync_umma_builder.inl` | A 和 B 不同 dtype,或 gmem 路径走 cp.async + TMA 混合 |
+| **array** | `_array_*_builder.inl` | grouped GEMM / ptr-array batch(每个 batch 一对指针)|
+| **simt** | `_simt_builder.inl` | 非 tensor core,走 CUDA core(`sm100_simt_builder.inl` 是 SM100 上唯一一条非 tensor core 路径)|
+| **complex** | `_planar_complex_*` / `_interleaved_complex_*` / `_9xBF16_*` | 复数 GEMM(planar = 实部虚部分开存;interleaved = 同一 buffer 交替存)|
+
+#### 实际清单(33 份)
+
+按 arch 分组的完整清单(`ls include/cutlass/gemm/collective/builders/`):
+
+```
+sm90_common.inl                          ← sm90 公共 helper
+sm90_gmma_builder.inl                    ← sm90 basic(Ch8 主要读这一份)
+sm90_sparse_config.inl                   ← sm90 sparse 公共 config
+sm90_sparse_gmma_builder.inl             ← sm90 sparse(2:4)
+
+sm100_common.inl                         ← sm100 公共 helper
+sm100_umma_builder.inl                   ← sm100 basic(Ch11 主要读这一份)
+sm100_sparse_umma_builder.inl            ← sm100 sparse
+sm100_blockscaled_umma_builder.inl       ← sm100 blockscaled(NVFP4 / MXFP8)
+sm100_blockscaled_sparse_umma_builder.inl← sm100 sparse + blockscaled
+sm100_blockscaled_mixed_tma_cpasync_umma_builder.inl ← sm100 blockscaled + TMA/cp.async 混合
+sm100_blockwise_umma_builder.inl         ← sm100 blockwise scaling
+sm100_mixed_input_umma_builder.inl       ← sm100 A/B 不同 dtype
+sm100_mixed_tma_cpasync_umma_builder.inl ← sm100 TMA/cp.async 混合
+sm100_cpasync_umma_builder.inl           ← sm100 纯 cp.async 路径(无 TMA)
+sm100_planar_complex_umma_builder.inl    ← sm100 planar complex
+sm100_interleaved_complex_umma_builder.inl ← sm100 interleaved complex
+sm100_9xBF16_umma_builder.inl            ← sm100 9xBF16 特殊格式
+sm100_9xBF16_interleaved_complex_umma_builder.inl ← sm100 9xBF16 + complex
+sm100_simt_builder.inl                   ← sm100 CUDA core(非 tensor core)
+sm100_pipeline_carveout.inl              ← sm100 pipeline stage 推导
+
+sm103_blockscaled_umma_builder.inl       ← sm103 (Blackwell refresh) blockscaled
+
+sm120_common.inl                         ← sm120 公共 helper
+sm120_mma_builder.inl                    ← sm120 basic
+sm120_sparse_mma_builder.inl             ← sm120 sparse
+sm120_blockscaled_mma_builder.inl        ← sm120 blockscaled
+sm120_blockscaled_sparse_mma_builder.inl ← sm120 sparse + blockscaled
+sm120_blockwise_mma_builder.inl          ← sm120 blockwise
+sm120_array_mma_builder.inl              ← sm120 grouped/ptr-array
+
+sm1xx_common.inl                         ← sm100/sm103 共享 helper
+sm1xx_sparse_config.inl                  ← sm100/sm103 sparse config
+```
+
+#### 为什么不是一份
+
+「为什么 CUTLASS 不写一个 `CollectiveBuilder` 处理所有情况?」三条理由:
+
+1. **mma atom 来源不一样**:Hopper 走 `cute::GMMA::ss_op_selector<ElementA, ElementB, ElementAccumulator, TileShape_MNK>()`,Blackwell 走 `cute::UMMA::Major` + `tag_to_umma_major_A/B<...>()` 内联构造。**写 if-else 选哪一个会让模板深度爆炸**,partial specialization 各管一份是 C++ 模板元编程最干净的分流。
+2. **smem layout 多余字段不一样**:basic 没有 scale tensor,blockscaled 有 `SmemLayoutAtomSFA/B`(per-block scale 的 smem 布局),sparse 多了 E(2:4 元数据)的 smem 布局。**派生 `SmemLayoutA/B` 的代码不一样**,塞同一份 builder 会让 static_assert 拒编条件写得很乱。
+3. **compute_stage_count 不一样**:basic 用 `compute_stage_count_or_override`,blockscaled 用 `compute_stage_count_with_blockwise_scale`(每个 stage 字节数里多了 scale tensor),sparse 用 `compute_stage_count_or_override_sparse`。**3 个不同公式**,硬塞一个 builder 就要 `if constexpr` 分流。
+
+所以每一份 `.inl` = 一份「(arch, feature) 的 partial specialization 集合」。CUTLASS 在 `collective_builder.hpp` 顶层把所有 `*.inl` 用 `#include` 串起来,让编译器看到所有 partial spec,按 13 个模板参数做 dispatcher 路由。
+
+#### 读哪一份
+
+按你的项目需要:
+
+| 你在做什么 | 读哪一份 |
+|---|---|
+| Hopper 普通 fp16/bf16 GEMM | `sm90_gmma_builder.inl`(Ch8 默认走这一份) |
+| Hopper 2:4 稀疏 | `sm90_sparse_gmma_builder.inl` |
+| Blackwell 普通 bf16/fp16 | `sm100_umma_builder.inl` |
+| Blackwell NVFP4 / MXFP8 | `sm100_blockscaled_umma_builder.inl`(`SmemLayoutAtomSFA/B` 在这) |
+| Blackwell 2:4 稀疏 | `sm100_sparse_umma_builder.inl` |
+| Blackwell A/B 不同 dtype | `sm100_mixed_input_umma_builder.inl` |
+| Blackwell grouped GEMM | `sm100_array_umma_builder.inl`(注意:array 在 sm100 上是独立的 builder,**不是** tag 选项) |
+| Blackwell CUDA core 路径 | `sm100_simt_builder.inl`(唯一非 tensor core 入口) |
+| 复数 GEMM | `sm100_planar_complex_umma_builder.inl` 或 `_interleaved_complex_umma_builder.inl`,按你存法选 |
+| SM120(consumer Blackwell)| `sm120_mma_builder.inl`(起步) |
+| SM120 grouped | `sm120_array_mma_builder.inl` |
+
+**debug 提示**:遇到「builder 推不出 partial spec」或「static_assert 报 `static_assert failed: ... CollectiveBuilder ...`」,**先翻这份清单**——多半是你要的 (arch, feature) 组合没在对应的 `.inl` 里,而你给的 tag 落到了错误的 spec。
 
 ### 8.1 它的任务
 
@@ -149,8 +248,9 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 
 ### 8.6 章末:读完这一章你该做得到的事
 
+- ✅ 看清 `include/cutlass/gemm/collective/builders/` 下 33 份 `.inl` 的二维拆分(arch × feature),知道「为什么不是一份」(mma atom 来源、smem layout 多余字段、`compute_stage_count` 公式三者都随 (arch, feature) 变)。
+- ✅ 给一个具体配置"(fp16, RowMajor × ColMajor, 128×128×32, ClusterShape<_4,_2,_1>)",能从 33 份里挑出对应那份(`sm90_gmma_builder.inl`),并能**手算** builder 会推什么(AtomLayoutMNK、PipelineStages、SmemLayoutAtomA)。
 - ✅ 能在 `sm90_gmma_builder.inl` 里读懂 partial specialization 的结构(挑 `KernelTmaWarpSpecialized` 那一个开始)。
-- ✅ 给一个具体配置"(fp16, RowMajor × ColMajor, 128×128×32, ClusterShape<_4,_2,_1>)",你能**手算** builder 会推什么(AtomLayoutMNK、StagesSmemLayoutAtomA)。
 - ✅ 知道 `Auto*` 不是"运行时决定",而是编译期算。
 
 ---
