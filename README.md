@@ -10,26 +10,26 @@
 
 ## 目录
 
-- [序章:为什么 CUTLASS 长成这样——5 件事、5 层类、5 个理由](#序章)
-- [第 1 章:5 层架构图(整体鸟瞰)](#第-1-章)
-- [第 2 章:跑通一个最小 GEMM——走读 `examples/48`](#第-2-章)
-- [第 3 章:CuTe——CUTLASS 真正的"语言"](#第-3-章)
-- [第 4 章:深入 CollectiveMainloop(本教程核心价值)](#第-4-章)
-- [第 5 章:深入 CollectiveEpilogue + EVT](#第-5-章)
-- [第 6 章:Kernel orchestrator + TileScheduler](#第-6-章)
-- [第 7 章:DispatchPolicy——tag-inheritance 模式](#第-7-章)
-- [第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现](#第-8-章)
-- [第 9 章:`examples/49`——一个用户故事](#第-9-章)
-- [第 10 章:调参世界观 + `cutlass_profiler`](#第-10-章)
-- [第 11 章:Blackwell 桥接——同样的 5 层架构,换了一组原子](#第-11-章)
-- [附录 A:Hopper 原语 ↔ CUTLASS 封装文件(速查表)](#附录-a)
-- [附录 B:In-tree 散文定位("你想读 X 看 Y")](#附录-b)
-- [附录 C:你手写 GEMM 的 X 行 ↔ CUTLASS 哪里(对照表)](#附录-c)
-- [附录 D:再之后(Grouped / Sparse / Conv / SSD / PDL)](#附录-d)
+- [序章:为什么 CUTLASS 长成这样——5 件事、5 层类、5 个理由](#preface)
+- [第 1 章:5 层架构图(整体鸟瞰)](#ch01-architecture)
+- [第 2 章:跑通一个最小 GEMM——走读 `examples/48`](#ch02-minimal-gemm)
+- [第 3 章:CuTe——CUTLASS 真正的"语言"](#ch03-cute)
+- [第 4 章:深入 CollectiveMainloop(本教程核心价值)](#ch04-mainloop)
+- [第 5 章:深入 CollectiveEpilogue + EVT](#ch05-epilogue)
+- [第 6 章:Kernel orchestrator + TileScheduler](#ch06-kernel-orchestrator)
+- [第 7 章:DispatchPolicy——tag-inheritance 模式](#ch07-dispatch-policy)
+- [第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现](#ch08-collective-builder)
+- [第 9 章:`examples/49`——一个用户故事](#ch09-user-story)
+- [第 10 章:调参世界观 + `cutlass_profiler`](#ch10-tuning)
+- [第 11 章:Blackwell 桥接——同样的 5 层架构,换了一组原子](#ch11-blackwell)
+- [附录 A:Hopper 原语 ↔ CUTLASS 封装文件(速查表)](#app-a-primitives)
+- [附录 B:In-tree 散文定位("你想读 X 看 Y")](#app-b-treemap)
+- [附录 C:你手写 GEMM 的 X 行 ↔ CUTLASS 哪里(对照表)](#app-c-mapping)
+- [附录 D:再之后(Grouped / Sparse / Conv / SSD / PDL)](#app-d-future)
 
 ---
 
-## 序章:为什么 CUTLASS 长成这样——5 件事、5 层类、5 个理由 {#序章}
+## 序章:为什么 CUTLASS 长成这样——5 件事、5 层类、5 个理由 {#preface}
 
 你手写 Hopper GEMM 时,脑子里并行地想了这些事:
 
@@ -74,7 +74,7 @@ CUTLASS 3.x 设计文档 `media/docs/cpp/cutlass_3x_design.md` 里列了 5 条:
 
 ---
 
-## 第 1 章:5 层架构图(整体鸟瞰) {#第-1-章}
+## 第 1 章:5 层架构图(整体鸟瞰) {#ch01-architecture}
 
 本章只立骨骼:每一层是谁、长在哪个文件、它做什么。具体细节在 Ch2–Ch11 展开。
 
@@ -236,7 +236,7 @@ arguments.scheduler.max_swizzle_size = options.swizzle;      // 1 / 2 / 4 / 8
 
 ---
 
-## 第 2 章:跑通一个最小 GEMM——走读 `examples/48` {#第-2-章}
+## 第 2 章:跑通一个最小 GEMM——走读 `examples/48` {#ch02-minimal-gemm}
 
 本教程**最重要**的一章。所有 5 层如何拼起来、host 端 API 长什么样、`<...>` 里那一串 dispatch-policy tag 怎么设——全部以这一章为入口展开。
 
@@ -510,7 +510,7 @@ Params params = to_underlying_arguments(arguments);
 
 ---
 
-## 第 3 章:CuTe——CUTLASS 真正的"语言" {#第-3-章}
+## 第 3 章:CuTe——CUTLASS 真正的"语言" {#ch03-cute}
 
 你可能认为 CuTe 是装饰用的工具库。其实不是——它是 CUTLASS **写 mainloop / epilogue 的语言**。Cutlass 文件里那一串 `cute::Shape` / `cute::Tile` / `cute::make_tensor` 不是装饰,是 mainloop 在描述"我这一 stage 的 smem 上 A 是什么样的"。
 
@@ -833,7 +833,7 @@ CuTe 不需要精通——**足够认得出来**就够读 Ch4。
 
 ---
 
-## 第 4 章:深入 CollectiveMainloop(本教程核心价值) {#第-4-章}
+## 第 4 章:深入 CollectiveMainloop(本教程核心价值) {#ch04-mainloop}
 
 如果本教程只选一章细读,选这一章。Mainloop 是 CUTLASS 3.x 写得最繁的部分——也是体现"5 层抽象是否值钱"的地方。
 
@@ -1077,7 +1077,7 @@ Ch4 把 mainloop 讲完了。下一章 Ch5 看 epilogue——几乎是镜像结�
 
 ---
 
-## 第 5 章:深入 CollectiveEpilogue + EVT {#第-5-章}
+## 第 5 章:深入 CollectiveEpilogue + EVT {#ch05-epilogue}
 
 Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(TMA store D)、同用 pipeline、同 swizzle、同 swappable 接口。区别只在:
 
@@ -1288,7 +1288,7 @@ struct HomogeneousSilu {
 
 ---
 
-## 第 6 章:Kernel orchestrator + TileScheduler(含调度器族侧栏) {#第-6-章}
+## 第 6 章:Kernel orchestrator + TileScheduler(含调度器族侧栏) {#ch06-kernel-orchestrator}
 
 这一章读 `include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp` + `sm90_tile_scheduler.hpp` + `static_tile_scheduler.hpp` + `tile_scheduler_params.h`。
 
@@ -1582,7 +1582,7 @@ Ch7 看 dispatch policy——为什么这一切被自动选到。
 
 ---
 
-## 第 7 章:DispatchPolicy——tag-inheritance 模式 {#第-7-章}
+## 第 7 章:DispatchPolicy——tag-inheritance 模式 {#ch07-dispatch-policy}
 
 这是 CUTLASS 3.x 的**架构精髓**——也是 `media/docs/cpp/` 几乎完全没有覆盖、本教程必须讲的东西。
 
@@ -1701,7 +1701,7 @@ using GetMmaPipeline = typename Kernel::DispatchPolicy::Schedule;  // ← 提取
 
 ---
 
-## 第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现 {#第-8-章}
+## 第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现 {#ch08-collective-builder}
 
 文件:`include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`(~10 个 partial specialization)。
 
@@ -1837,7 +1837,7 @@ constexpr int compute_stage_count(...) {
 
 ---
 
-## 第 9 章:`examples/49`——一个用户故事 {#第-9-章}
+## 第 9 章:`examples/49`——一个用户故事 {#ch09-user-story}
 
 文件:`examples/49_hopper_gemm_with_collective_builder/49_collective_builder.cu`。
 
@@ -1967,7 +1967,7 @@ if constexpr (UseCustomEVT) {
 
 ---
 
-## 第 10 章:调参世界观 + `cutlass_profiler` {#第-10-章}
+## 第 10 章:调参世界观 + `cutlass_profiler` {#ch10-tuning}
 
 这一章不讲新机制——只是把 Ch1-9 给的所有"开关"整理成一张调参表,以及"怎么科学地 autotune"。
 
@@ -2098,7 +2098,7 @@ make -j cutlass_profiler
 
 ---
 
-## 第 11 章:Blackwell 桥接——同样的 5 层架构,换了一组原子 {#第-11-章}
+## 第 11 章:Blackwell 桥接——同样的 5 层架构,换了一组原子 {#ch11-blackwell}
 
 最后这一章**反向**证实 Ch1-8 的 5 层抽象为什么值钱:同一个 5 层框架在 Blackwell 上几乎是逐行对应,但底层的 mma / smem 单元变了。
 
@@ -2204,7 +2204,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 ---
 
-## 附录 A:Hopper 原语 ↔ CUTLASS 封装文件(速查表) {#附录-a}
+## 附录 A:Hopper 原语 ↔ CUTLASS 封装文件(速查表) {#app-a-primitives}
 
 |原语|CUTLASS 封装路径|一行说明|
 |---|---|---|
@@ -2227,7 +2227,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 ---
 
-## 附录 B:In-tree 散文定位("你想读 X 看 Y") {#附录-b}
+## 附录 B:In-tree 散文定位("你想读 X 看 Y") {#app-b-treemap}
 
 本文是自洽的,但仓库里 `media/docs/cpp/` 还有 ~30 篇高质量散文。本表告诉你"如果想深挖,看哪里"。
 
@@ -2266,7 +2266,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 ---
 
-## 附录 C:你手写 GEMM 的 X 行 ↔ CUTLASS 哪里(对照表) {#附录-c}
+## 附录 C:你手写 GEMM 的 X 行 ↔ CUTLASS 哪里(对照表) {#app-c-mapping}
 
 这一章是"用户视角的快速跳转表"——给你在写 CUTLASS 3.x GEMM 时,看到自己手写 GEMM 的某一段,就跳到 CUTLASS 的对应位置。
 
@@ -2305,7 +2305,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 ---
 
-## 附录 D:再之后(Grouped / Sparse / Conv / SSD / PDL) {#附录-d}
+## 附录 D:再之后(Grouped / Sparse / Conv / SSD / PDL) {#app-d-future}
 
 本教程主线是 GEMM。但 CUTLASS 还在以下方向延伸,**每个主题 1–2 段**,告诉你"文件名 + 一个指针"。
 
