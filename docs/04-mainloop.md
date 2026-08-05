@@ -120,6 +120,24 @@ load_tail(MainloopPipeline, PipelineState smem_pipe_write);                    /
 
 `producer_acquire(state)` / `producer_commit(state, bytes)` / `consumer_wait(state)` / `consumer_release(state)` 这些都是 `PipelineTmaAsync<N>` 类的方法,在 `include/cutlass/pipeline/sm90_pipeline.hpp` 里(`PipelineTmaAsync<Stages>::producer_acquire(PipelineState state)` 等)。
 
+#### 四方法的语义——Ch4 必须先校准的 4 个词
+
+`PipelineTmaAsync<N>` 的 4 个方法每个有明确的「阻塞 / 非阻塞 / 可能在某些条件下退化」语义,写 mainloop 时不能搞混:
+
+| 方法 | 谁调用 | 阻塞? | 作用 |
+|---|---|---|---|
+| `producer_acquire(state)` | producer(TMA 加载 warp) | **阻塞** | 等到 `state` 对应的 stage 被 consumer `release` 后才返回——也就是确认这个 smem 槽位空出来了,可以写入。 |
+| `producer_commit(state)` | producer | **非阻塞**(但在 TMA 场景下可能被吞掉,见下) | 把当前 stage 标记成「producer 已完成」,通知 consumer。 |
+| `consumer_wait(state)` | consumer(WGMMA warp) | **阻塞** | 等到 `state` 对应的 stage 被 producer `commit` 后才返回——也就是确认 smem 槽位里已有可读数据,可以发起 mma。 |
+| `consumer_release(state)` | consumer | **非阻塞** | 把当前 stage 标记成「consumer 已用完」,让 producer 可以重新写这个槽位。 |
+
+两个「会被吞掉」的关键细节,手写时容易踩:
+
+1. **`producer_commit` 在 TMA 场景下可能是 NoOp**——因为 TMA 自身完成时会自动 arrive barrier 并 arrive bytes,所以你再调一次 `producer_commit` 是冗余的(但无害)。`PipelineTmaAsync` 故意保留了 API 形式一致;真正的 producer-commit 语义由 TMA 完成事件承担。
+2. **`make_producer_start_state<MainloopPipeline>()` 不是装饰**——pipeline 在起点「空」的时候,producer 的第一次 `acquire` 会直接成功;但你必须显式构造「让首轮 acquire 成功」的 state,而不是用默认构造的 state。这是 `smem_pipe_write = make_producer_start_state<MainloopPipeline>()` 在 Ch6 主循环出现的原因。
+
+> 一句话总结:**acquire / wait 是「等我需要的东西就绪」,commit / release 是「通知对方我这边就绪/用完」。** 两个阻塞方法(acquire、wait)是真正让线程「停下来等」的同步点;两个非阻塞方法只是更新 barrier 状态、不卡线程。
+
 producer 和 consumer 在**同一个** smem pipeline 上协作,但**可以并行**——producer 在 stage 0 / 1 / 2 加载,consumer 在 stage 0 做 mma。Ch6 主循环代码里你会看到这两个 while 怎样在同一个 kernel entry 里交错。
 
 #### `load`

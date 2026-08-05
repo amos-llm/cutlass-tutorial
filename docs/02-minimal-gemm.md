@@ -4,6 +4,17 @@
 
 文件:`examples/48_hopper_warp_specialized_gemm/48_hopper_warp_specialized_gemm.cu`。**实质 user-facing 代码量很小,主体是 `Options` 解析 + reference GEMM + `main`**——这一章只读 user-facing 部分。
 
+### 2.0 examples/48 文件头交代的 4 件事
+
+`48_*.cu` 顶部 `\brief` 块把「为什么这个 example 用得着 Hopper」总结成 4 件事。这一章按这 4 件事展开,对应关系是:
+
+1. **WGMMA(第三代 tensor core)**——Hopper 引入的 warpgroup 级矩阵乘累加,比 Ampere 时代的 mma.sync 更宽。这是 mainloop 计算阶段(Ch4)用的指令。
+2. **TMA(Tensor Memory Accelerator)**——硬件单元,做大块 gmem ↔ smem 传输,以及 cluster 内 CTA 间 smem 互访。还支持 FP32→TF32 的隐式精度截断,免得你手写转换。这是 mainloop 加载阶段(Ch4)和 epilogue 写回(Ch5)用的机制。
+3. **Warp Specialized kernel**——producer warp(TMA 加载)+ consumer warp(WGMMA 计算)分开;两拨线程并行、靠 mbarrier 同步。比「所有人既加载又计算」少一半同步开销。是 Ch4 / Ch6 主循环编排的核心 pattern。
+4. **CTA rasterization + swizzle**——CTA 排布方向(沿 M 还是沿 N)+ swizzle 大小(1/2/4/8),影响跨 CTA 的 L2 locality,调对了能涨几个点。是 Ch6 的 `TileScheduler` 参数(`raster_order` + `max_swizzle_size`)。
+
+这 4 件事就是 3.x GEMM 在 Hopper 上的全部「特殊」——没有第 5 条。`examples/49`(Ch9)也是同一组 mechanism,只是数据类型/调度换了一换。
+
 ### 2.1 上手:用 CUTLASS 跑一个 TF32 Hopper GEMM 需要哪几步
 
 ```cpp

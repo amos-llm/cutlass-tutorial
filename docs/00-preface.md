@@ -34,6 +34,26 @@ CUTLASS 3.x 设计文档 `media/docs/cpp/cutlass_3x_design.md` 里列了 5 条:
 4. **硬件可移植**:同一套 5 层框架可以在 Hopper、Blackwell、Volta、Ampere、Turing 上工作;具体某一层(比如 mma atom)从 `WGMMA` 换到 `UMMA` 不影响其他 4 层。
 5. **默认正确**:`Auto*`(`StageCountAuto`、`KernelScheduleAuto`、`EpilogueScheduleAuto`)总是选一个合理的实现,你得手写错才能跑错——这是 3.x 比 2.x 显著进步的一处。
 
+### 2.x 的归类破了一个洞——这才是重写的真正动机
+
+上面 5 条理由听起来像「设计目标」,但 CUTLASS 3.x 不是为了好看重写,是被 Hopper 逼的。具体说:2.x 把 GEMM 的所有部件按 **GPU 硬件层次**(thread / warp / threadblock)分层——`gemm::threadblock::MmaMultistage`、`gemm::warp::MmaTensorOp` 等等。这套组织假设了「每一层都有同名的硬件单元」。
+
+Hopper 的 WGMMA 打破了这个假设。WGMMA 的指令粒度是 **4-warp × 4-warp warpgroup**(32 lane × 32 lane = 1024 thread 的指令),既不属于 `warp` 层,也不属于 `threadblock` 层——它在 2.x 的层次里没有「家」。同样,Volta 上的 quad-pair mma 指令也是先在 warp 层 tile 一遍再用,本来就是硬塞进去的。TMA 也不是「threadblock 级 memcpy」,它有自己的 descriptor 和跨 cluster 能力,塞进 2.x 的 threadblock iterator 又是一处硬塞。
+
+CUTLASS 3.x 的解法是**重新切分层次**,不再按「硬件哪一层」切,而是按 **GEMM 算法本身的自然结构**切:`CollectiveMma`(一次迭代里 group 协作做的事)、`CollectiveEpilogue`(产物出来后要做什么)、`Kernel`(orchestrator + scheduler)、`Device`(host 句柄)。这样硬件变了,WGMMA → UMMA,只是换一个 dispatch tag,5 层骨架不动。
+
+> 一句话:**2.x 把 GEMM 绑在了 GPU 拓扑上,所以每来一种新指令都得拆骨架;3.x 把 GEMM 绑在算法结构上,硬件只是参数。**
+
+### 「默认正确」不只是 slogan——CuTe 给你了硬保证
+
+2.x 的「默认正确」是社区约定:default config 用对了就跑对,用错了就崩。3.x 的「默认正确」是**编译期就能查**:
+
+- CuTe 的 `Layout` 始终保持坐标一致性,所有静态内层循环的 pre/post-condition 都在编译期检查。
+- `if (compile-time 条件满足)` → 否则直接 static_assert 拒绝编译。
+- 这意味着:**内层循环如果编译通过,大概率是正确的**;2.x 要靠运行时 reference 对比才能确认。
+
+副作用:编译时间变长,出错信息变陡峭。`Auto*` tag 的便利和编译期硬保证是同一件事的两面。
+
 ### 本教程的承诺
 
 - **重写、自成一体**——不依赖读者已经读过 `media/docs/cpp/` 任何一篇文章。但附录 B 给"如果你想深挖,看哪里"的导航。
