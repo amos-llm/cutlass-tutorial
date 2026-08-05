@@ -1,0 +1,45 @@
+## 序章:为什么 CUTLASS 长成这样——5 件事、5 层类、5 个理由
+
+你手写 Hopper GEMM 时,脑子里并行地想了这些事:
+
+1. **问题切片**:M、N、K 三个维度各自切多大块(`BlockM × BlockN × BlockK`,你可能叫 tile size 或 threadblock shape)。
+2. **CTA 调度**:`gridDim.x/y/z` 该怎么排,几个 CTA 跑同一个 tile、要不要做 L2-locality swizzle、要不要 persistent(每个 CTA 处理多 tile)。
+3. **加载 A/B**:gmem → smem 走 TMA 还是 cp.async,描述符怎么准备、smem 怎么 swizzle 防 bank conflict、几条 stage 流水线。
+4. **mma 计算**:A、B 在 smem 里怎么布局 → WGMMA,fragment 累积器怎么分给 warp / lane、流水线推进。
+5. **写回 C/D**:做完的 accumulator 怎么搬到 gmem,要不要顺手做 bias / ReLU / swizzle。
+
+CUTLASS 3.x 把这件事**正好**切成 5 个 C++ 类,每类一一对应一件事:
+
+```text
+┌─ 切层类(对应 GEMM 5 件事)
+│
+├─ 1. cutlass::gemm::device::GemmUniversalAdapter       ──  host 句柄:开工、收尾
+├─ 2. cutlass::gemm::kernel::GemmUniversal<...>          ──  CTA 调度 + 主循环 orchestrator
+├─ 3. cutlass::gemm::collective::CollectiveMma           ──  加载 A/B → mma(事 3 + 事 4)
+├─ 4. cutlass::epilogue::collective::CollectiveEpilogue  ──  写回 C/D + 融合算子(事 5)
+└─ 5. cutlass::gemm::kernel::*TileScheduler              ──  切 tile + 排队(事 1 + 事 2)
+```
+
+![CUTLASS 五层架构图](../media/images/cutlass-layered-organization.png)
+
+> **如果你只能记住这张图,就够了。** 后面每一章只是把这一张图"哪个方框里住着什么、代码长什么样、对应你手写的哪一段"展开。
+
+### 5 个设计理由(为什么这样切、不那样切)
+
+CUTLASS 3.x 设计文档 `media/docs/cpp/cutlass_3x_design.md` 里列了 5 条:
+
+1. **可组合性**:5 层之间用模板参数互不依赖,可以单独替换某一层而不动其他层。比如你想改 epilogue 加 swizzle,只换第 4 个模板参数,不动 mainloop。
+2. **可配置性**:每个具体实现都用"dispatch policy" tag(空 struct)标记,builder(第 8 章)用 tag 路由到对应 partial specialization——用户写 `Auto` 而不是写具体类名。
+3. **关注点分离**:mma 编程模型(`CollectiveMma`)和 epilogue 融合(`CollectiveEpilogue`)是两个完全不同的领域专家的工作,CUTLASS 把它们解耦,各自演化。
+4. **硬件可移植**:同一套 5 层框架可以在 Hopper、Blackwell、Volta、Ampere、Turing 上工作;具体某一层(比如 mma atom)从 `WGMMA` 换到 `UMMA` 不影响其他 4 层。
+5. **默认正确**:`Auto*`(`StageCountAuto`、`KernelScheduleAuto`、`EpilogueScheduleAuto`)总是选一个合理的实现,你得手写错才能跑错——这是 3.x 比 2.x 显著进步的一处。
+
+### 本教程的承诺
+
+- **重写、自成一体**——不依赖读者已经读过 `media/docs/cpp/` 任何一篇文章。但附录 B 给"如果你想深挖,看哪里"的导航。
+- **单文件**——便于全文搜、git 单 file diff、转 PDF。章末锚点 `<a name>` 可直接跳转。
+- **类名不省略**——每个 `using`、`constexpr`、`typename`、`operator()` 前缀都不缩。
+- **你不熟悉的 CUTLASS 概念 ↔ 你已经会的 Hopper 概念**——每个新类、每个调度 tag、每个 `SharedStorage` 段都有手写对照 callout。
+
+---
+
