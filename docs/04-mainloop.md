@@ -118,6 +118,163 @@ load_tail(MainloopPipeline, PipelineState smem_pipe_write);                    /
   load_init → while (k < K) { consumer_wait(state); mma(state); state++; } → mma_tail
 ```
 
+#### 8 个方法——逐个拆解
+
+每个方法的「签名 / 谁调 / 什么时候 / 做什么 / 前置条件」。**每个 entry 都对应 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 一处,行号是对应**。
+
+##### 1. `to_underlying_arguments`(static,host 端)
+
+```cpp
+template <class ProblemShape>
+static constexpr Params
+to_underlying_arguments(ProblemShape const& problem_shape,
+                        Arguments const& args, void* workspace);
+```
+
+- **行号**: L202-240
+- **谁调**: Device 层 `GemmUniversalAdapter` 在 `initialize()` 里调一次,**kernel 启动前**
+- **做什么**: 把 host 端的 runtime `Arguments`(`ptr_A / ptr_B / dA / dB` 之类)固化进 `Params`,并在 **这一步** 用 `make_tma_copy_A_sm90` / `make_tma_copy_B_sm90` 把 TMA descriptor 编好。返回的 `Params` 会被传给 kernel,device 端只读
+- **前置条件**: `workspace` 必须指向 builder 在 `get_workspace_size()` 里声明的地址(虽然 sm90 这份实现 `(void) workspace;` 没用,但 `sm100_umma_builder.inl` 会用——比如 ptr-array batch 要把 tensor map 数组放 workspace)
+- **特点**: `static constexpr` 但内部其实是运行时构造 TMA descriptor(TMA 描述符涉及运行时计算 box dimensions)。这就是 Ch0.2「默认正确」那段说的"为了避免意外触发编译而拆 3 段"——`to_underlying_arguments` 在 `initialize()` 里跑,出问题不会让编译炸
+
+##### 2. `can_implement`(static,host 端)
+
+```cpp
+template<class ProblemShape>
+static bool
+can_implement(ProblemShape const& problem_shape, Arguments const& args);
+```
+
+- **行号**: L242-261
+- **谁调**: Device 层 `GemmUniversalAdapter::can_implement(arguments)` 转发到这里
+- **做什么**: 校验 (problem_shape × args) 是不是**合法组合**——目前 sm90 这份只查 **TMA 对齐**(`check_alignment<min_tma_aligned_elements_A/B>` 看 `M, K` 维 stride 是否满足 128-bit 对齐)
+- **前置条件**: 无
+- **返回值**: `true` 表示能跑,`false` 表示 builder 选了不支持的组合。调用方拿 false 时会抛 `CUTLASS_CHECK` 错误
+- **注意**: 这里的 `can_implement` **不查 smem 是否够**——smem 检查在 builder 里(Ch8 `compute_stage_count_or_override`)。也就是说 `can_implement` 通过不代表一定跑得起来,还得看 builder 推出来的 `PipelineStages` 是否 > 0
+
+##### 3. `prefetch_tma_descriptors`(static,device 端)
+
+```cpp
+static void prefetch_tma_descriptors(Params const& mainloop_params);
+```
+
+- **行号**: L271-276
+- **谁调**: kernel orchestrator(Ch6 的 `GemmUniversal::device_kernel`),只让 warp 0 lane 0 真正调,其他线程在 `if (lane_predicate)` 外直接跳过
+- **做什么**: `cute::prefetch_tma_descriptor(tma_load_a)` + 同 b——把 TMA descriptor 提到 L1/Tex cache。**这步必须在 kernel 第一条 TMA 指令之前足够早**,否则首次 TMA 会有 stall
+- **前置条件**: `mainloop_params.tma_load_a/b` 必须有效(由 `to_underlying_arguments` 填好)
+- **幂等性**: 标了 `static`,但因为是 device 端方法,**不是**编译期常量;真正幂等靠 caller 的 `lane_predicate` 保护(每个 warp 一份工作,warp 0 lane 0 做,其他人 skip)
+
+##### 4. `load_init`(instance const,device 端,K-loop 前调一次)
+
+```cpp
+template <class ProblemShape_MNKL>
+CUTLASS_DEVICE auto
+load_init(ProblemShape_MNKL const& problem_shape_MNKL,
+          Params const& mainloop_params) const;
+```
+
+- **行号**: L284-301
+- **谁调**: kernel orchestrator 在 producer 和 consumer K-loop **开始前各调一次**——producer 拿到 gmem 视图用来发 TMA,consumer 一般不需要但为了接口一致也调
+- **做什么**: 把 `mainloop_params.tma_load_a/b` 里藏着的 full gmem tensor 拿出来,用 `local_tile(..., TileShape{}, make_coord(_,_,_), Step<...>{})` 切成"CTA 级"视图,返回 `tuple<gA_mkl, gB_nkl>`。注意返回的不是 smem 布局——是 **gmem 的 tile 视图**,TMA 后续要靠它
+- **前置条件**: `mainloop_params` 必须有效
+- **返回**: `cute::tuple<Tensor, Tensor>`,shape 分别 `(BLK_M, BLK_K, m, k, l)` 和 `(BLK_N, BLK_K, n, k, l)`。**这是 collective 和 kernel 层的契约**——`load()` 用 `get<0>(load_inputs)` / `get<1>(load_inputs)` 解构。L280-282 注释明确说 "first two elements must be gA_mkl and gB_nkl"
+
+##### 5. `load`(instance,device 端,K-loop 每 tile 调一次,producer)
+
+```cpp
+template <class TensorA, class TensorB, class KTileIterator, class BlockCoord>
+CUTLASS_DEVICE void
+load(Params const& mainloop_params,
+     MainloopPipeline pipeline,
+     PipelineState smem_pipe_write,
+     cute::tuple<TensorA, TensorB> const& load_inputs,
+     BlockCoord const& blk_coord,
+     KTileIterator k_tile_iter, int k_tile_count,
+     int thread_idx,
+     uint32_t block_rank_in_cluster,
+     TensorStorage& shared_tensors);
+```
+
+- **行号**: L309-392
+- **谁调**: producer warpgroup 的 K-loop 体内,每个 K-tile 调一次
+- **做什么**: 用 TMA 把 gmem 的 `(BLK_M, BLK_K)` 和 `(BLK_N, BLK_K)` 写到 smem 的当前 stage。**单线程**(`cute::elect_one_sync()`)做实际 TMA 发起,其他线程直接 skip;multicast 时构造 mcast_mask
+- **前置条件**: `smem_pipe_write` 当前 stage 必须已被 consumer `release`(由 `pipeline.producer_acquire()` 检查);`load_inputs` 是 `load_init` 返回的 tuple
+- **循环里做的事**(per K-tile):
+  1. `pipeline.producer_acquire(smem_pipe_write)` —— 等 stage 空
+  2. `pipeline.producer_get_barrier(smem_pipe_write)` —— 拿当前 stage 的 mbarrier
+  3. `copy(tma_load_a.with(barrier, mcast_mask), gmem_partition, smem_partition(_,_,_,write_stage))` —— 发 TMA
+  4. `++k_tile_iter` —— 推到下一个 K 切片
+  5. `++smem_pipe_write` —— 推到下一个 stage(parity 自动翻转)
+- **关键**: TMA 完成时**自动 arrive barrier**(`producer_commit` 在 TMA 路径是 NoOp,见 Ch4 4-方法语义框);所以 load 里**没有显式 commit**
+- **`CUTLASS_PRAGMA_NO_UNROLL`**: L371 显式阻止编译器 unroll,producer / consumer 必须按 runtime `k_tile_count` 推进
+
+##### 6. `load_tail`(instance,device 端,K-loop 收尾,producer 调一次)
+
+```cpp
+CUTLASS_DEVICE void
+load_tail(MainloopPipeline pipeline, PipelineState smem_pipe_write);
+```
+
+- **行号**: L394-409
+- **谁调**: producer K-loop 退出后调一次
+- **做什么**: `pipeline.producer_tail(smem_pipe_write)` —— 等所有 stage 都被 consumer `release`(或初始 `make_producer_start_state` 的 phase 让 acquire 直接成功)。**关键目的**: 防止 cluster 里 producer 跑得快的 CTA 提前 `cudaDeviceSynchronize` 退出,L2 缓存被踢,导致慢的 CTA 拿不到数据
+- **前置条件**: K-loop 体内 producer 已推进 `smem_pipe_write` 到「最后推进 + 1」位置(就是 K-loop 退出时的 state)
+- **单线程**: `cute::elect_one_sync()` 保护,只有 warp 0 lane 0 真的调
+
+##### 7. `mma`(instance,device 端,K-loop 每 tile 调一次,consumer)
+
+```cpp
+template <class FrgTensorC>
+CUTLASS_DEVICE void
+mma(MainloopPipeline pipeline,
+    PipelineState smem_pipe_read,
+    FrgTensorC& accum,
+    int k_tile_count,
+    int thread_idx,
+    TensorStorage& shared_tensors,
+    Params const& mainloop_params);
+```
+
+- **行号**: L416-559
+- **谁调**: consumer warpgroup 的 K-loop 体内,每个 K-tile 调一次
+- **做什么**: 1) 等 smem 当前 stage 可读,2) 把 smem 上 `(BLK_M, BLK_K, PIPE)` 和 `(BLK_N, BLK_K, PIPE)` 的当前 stage 通过 `partition_A/B` 摊到 `TiledMma` 的 thread fragment,3) `cute::gemm(TiledMma, ..., accum)` 推到 `wgmma.mma_async.sync.aligned.m64n...k16...`,4) `consumer_release` 把 stage 让回给 producer
+- **前置条件**: `accum` 必须是 rmem 驻留的 `cute::Tensor`(`static_assert(is_rmem<FrgTensorC>::value)`);`smem_pipe_read` 当前 stage 必须已被 producer TMA 完成(由 `pipeline.consumer_wait()` 检查)
+- **循环里做的事**(per K-tile):
+  1. `pipeline.consumer_wait(smem_pipe_read)` —— 等 stage 写好
+  2. 取当前 stage 的 smem sub-tile,做 `cute::gemm(TiledMma, frag_A, frag_B, accum)`
+  3. `pipeline.consumer_release(smem_pipe_read)` —— 释放 stage
+  4. `++smem_pipe_read` —— 推到下一个 stage(parity 翻转)
+- **关键**: `mma` 内层 `cute::gemm` 实际是 PTX `wgmma.mma_async`(Hopper 上是异步 mma,warpgroup 指令),一次发 64×16×16 sub-tile。多次 sub-tile 累加到同一个 `accum`,直到 K-loop 退出
+- **`K_PIPE_MMAS = 1`** (L264): WGMMA 一次只取 1 个 K-tile,所以 consumer/producer K-loop 长度严格相等
+
+##### 8. `mma_tail`(instance,device 端,K-loop 收尾,consumer 调一次)
+
+```cpp
+CUTLASS_DEVICE void
+mma_tail(MainloopPipeline pipeline,
+         PipelineState smem_pipe_release, int k_tile_count);
+```
+
+- **行号**: L561-577
+- **谁调**: consumer K-loop 退出后调一次
+- **做什么**: 1) 处理 K-loop 没跑完的「prologue 剩余 mma」(`prologue_mma_count = min(K_PIPE_MMAS, k_tile_count)`,K_PIPE_MMAS=1,这里基本就是 0 或 1),2) `smem_pipe_release.advance(k_tile_count)` 推到对应 stage,3) `warpgroup_wait<0>()` 等所有 async mma 完成,4) 对 `prologue_mma_count` 个 stage 做 `consumer_release`
+- **前置条件**: K-loop 已退出,`accum` 不再被修改
+- **目的**: **确保所有 WGMMA 指令 retire**(异步 mma,提交后还在 GPU 内部流水)。`warpgroup_wait<0>` 是硬件级 wait,把 warpgroup 全部 mma 指令 fence 完,才能保证 `accum` 写完可被 epilogue 读
+
+#### 方法之间的契约
+
+把 8 个方法串起来看,**consumer 和 producer 之间的契约**只通过两类东西传:
+
+1. **smem 上的数据**(通过 pipeline barrier 同步可见性)
+2. **`PipelineState`**(推进 stage、parity 翻转)
+
+所以 `mma` 和 `load` 各自带一个独立的 `PipelineState`(`smem_pipe_read` / `smem_pipe_write`),**初始位置**也不同:
+
+- producer 起点:`make_producer_start_state<MainloopPipeline>()`(phase 让首次 `acquire` 直接成功)
+- consumer 起点:默认构造(`smem_pipe_read` 默认从 stage 0 开始)
+
+两个 state 在 K-loop 里各自 `++`,互相不依赖——通过 barrier 的 arrive/wait 间接同步。这是 **Ch0「5 层互不依赖」的体现**:mainloop 内部怎么编排 producer/consumer 都是 CollectiveMma 的事,kernel 层只调 5 个方法 + 维护两块 PipelineState。
+
 `producer_acquire(state)` / `producer_commit(state, bytes)` / `consumer_wait(state)` / `consumer_release(state)` 这些都是 `PipelineTmaAsync<N>` 类的方法,在 `include/cutlass/pipeline/sm90_pipeline.hpp` 里(`PipelineTmaAsync<Stages>::producer_acquire(PipelineState state)` 等)。
 
 #### 四方法的语义——Ch4 必须先校准的 4 个词
