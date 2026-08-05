@@ -1,105 +1,70 @@
 ## 第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
 
-### 8.0 builder 不是一份——它是 33 份的 dispatcher
+### 8.0 sm90_gmma_builder.inl 里的 8 个 partial spec 怎么分
 
-`include/cutlass/gemm/collective/builders/` 下不是一份文件,而是 **33 份 `.inl`**。读 Ch8 之前先认清这张「地图」,否则会被文件名劝退,也不知道自己该读哪一份。
+`sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。读 Ch8 之前先认清这 8 个 spec,否则 §8.2 给你看的「最大那个」会让你不知道还有别的,也不知道为什么自己的配置落到那个 spec。
 
-#### 二维拆分:arch × feature
+每个 spec 都被一段 `cute::enable_if_t<...>` 在模板参数末尾分流。**13 个模板参数里,所有 spec 都共用前 12 个(arch, op_class, element, layout, alignment × 2, accumulator, tile, cluster, stage_count),唯一的分流维度是第 13 个 —— `KernelScheduleType`**。具体说,3 个开关决定落到哪个 spec:
 
-每一份 builder 对应一个 (arch, feature) 组合。两个轴:
+#### 三个开关
 
-**arch 轴(决定 mma atom 来源)**:
-
-| arch | 文件前缀 | mma atom 来源 | smem 上限 |
-|---|---|---|---|
-| **sm90**(Hopper)| `sm90_*` | `cute::GMMA::ss_op_selector<...>`(WGMMA,smem-smem) | `detail::sm90_smem_capacity_bytes` |
-| **sm100**(Blackwell)| `sm100_*` | `cute::UMMA::Major` + `tag_to_umma_major_A/B<...>`,atom 内联构造(Ch11)| sm100 smem 上限 |
-| **sm103**(Blackwell refresh)| `sm103_blockscaled_umma_builder.inl` | 同 sm100,但用 sm103 特有的指令 | 同 sm100 |
-| **sm120**(consumer Blackwell)| `sm120_*` | sm120 MMA atom(走 TMA,不是 cluster launch)| sm120 smem 上限 |
-
-**feature 轴(决定数据类型 / 数据通路)**:
-
-| feature | 后缀 | 加了什么 |
+| 开关 | 哪个模板参数决定 | 取值 |
 |---|---|---|
-| **basic** | `_gmma_builder.inl` / `_umma_builder.inl` / `_mma_builder.inl` | 单纯 fp16 / bf16 / tf32 / fp32 GEMM |
-| **sparse** | `_sparse_gmma_builder.inl` / `_sparse_umma_builder.inl` / `_sparse_mma_builder.inl` | 2:4 结构化稀疏(atom 是 `ss_op_selector_sparse` 或对应 UMMA sparse)|
-| **blockscaled** | `_blockscaled_*_builder.inl` | NVFP4 / MXFP8 这类「每个 block 有自己的 scale」(atom 走 `compute_stage_count_with_blockwise_scale`,smem layout 多了 `SmemLayoutAtomSFA/B` 来放 per-block scale) |
-| **blockwise** | `_blockwise_umma_builder.inl` / `_blockwise_mma_builder.inl` | blockwise scaling(sm100 + sm120) |
-| **mixed_input** | `_mixed_input_umma_builder.inl` / `_mixed_tma_cpasync_umma_builder.inl` | A 和 B 不同 dtype,或 gmem 路径走 cp.async + TMA 混合 |
-| **array** | `_array_*_builder.inl` | grouped GEMM / ptr-array batch(每个 batch 一对指针)|
-| **simt** | `_simt_builder.inl` | 非 tensor core,走 CUDA core(`sm100_simt_builder.inl` 是 SM100 上唯一一条非 tensor core 路径)|
-| **complex** | `_planar_complex_*` / `_interleaved_complex_*` / `_9xBF16_*` | 复数 GEMM(planar = 实部虚部分开存;interleaved = 同一 buffer 交替存)|
+| **gmem 路径**(TMA 还是 cp.async)| `KernelScheduleType` 的 tag 前缀 | `KernelTma*` 走 TMA;`KernelCpAsync*` 走 cp.async(Ampere 风格)|
+| **warp-specialized**(producer/consumer 分工)| 同上 — tag 后缀 | `WarpSpecialized` / `WarpSpecializedPingpong` / `WarpSpecializedCooperative` = 切了;`KernelTma`(裸)| = 没切;`KernelMultistage` = 旧式多 stage |
+| **A 在 smem 还是 register**(SS / RS)| `ElementA` 的 type trait (`detail::is_use_rmem_A<...>()`)| 命中 = A 留 register(混合精度 / ConvertAndScale / DirectConvert / 不同 dtype);不命中 = A 走 smem |
 
-#### 实际清单(33 份)
+#### 8 个 spec 的全表
 
-按 arch 分组的完整清单(`ls include/cutlass/gemm/collective/builders/`):
+`sm90_gmma_builder.inl` 按文件里的 `// 名字` 注释标注(行号对应 `include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`):
 
-```
-sm90_common.inl                          ← sm90 公共 helper
-sm90_gmma_builder.inl                    ← sm90 basic(Ch8 主要读这一份)
-sm90_sparse_config.inl                   ← sm90 sparse 公共 config
-sm90_sparse_gmma_builder.inl             ← sm90 sparse(2:4)
+| # | 文件里名字 | 行号 | 三个开关组合 | 备注 |
+|---|---|---|---|---|
+| 1 | `GMMA_TMA_WS_SS` | L195 | **TMA + WS + SS** | **默认路径** — `examples/48` 落这。`KernelTmaWarpSpecialized`(及 Pingpong / Cooperative、PtrArray 变体)+ A 走 smem |
+| 2 | `GMMA_TMA_WS_RS` | L313 | **TMA + WS + RS** | 同 WS tag 5 个 + `is_use_rmem_A` 命中。A 留 register 跨 mma step(mixed precision,ConvertAndScale,DirectConvert,A/B 不同 dtype)|
+| 3 | `GMMA_TMA_WS_FP8_FAST_ACCUM_SS` | L510 | **TMA + WS + SS + FP8 fast-accum** | tag 5 个 `_FP8FastAccum` 后缀 + 输入必须 FP8。走硬件 fast-accum(不经过 fp32 中转)|
+| 4 | `GMMA_TMA_SS` | L619 | **TMA + 非 WS + SS** | 旧式 `KernelTma`(所有人又加载又计算)+ SS。Ampere 时代的「非 warp-specialized」,Hopper 上仍能编译但**没优化收益** |
+| 5 | `GMMA_CpAsync` | L706 | **cp.async + `KernelMultistage`** | **`[[deprecated]]` 标记**(L707) — 内部直接转发到 `KernelCpAsyncWarpSpecialized`(L731-734),用户写 `KernelMultistage` 会触发 deprecation 警告,新代码不该用 |
+| 6 | `GMMA_CpAsync_WS_SS` | L758 | **cp.async + WS + SS** | `KernelCpAsyncWarpSpecialized`(及 Pingpong / Cooperative)+ SS。**Ampere 上**`examples/14_ampere_tf32_tensorop_gemm/` 落这;Hopper 上也能用但**不推荐**(TMA 路径收益更大) |
+| 7 | `GMMA_CpAsync_WS_RS` | L861 | **cp.async + WS + RS** | 同 3 个 cp.async WS tag + `is_use_rmem_A` 命中 |
+| 8 | `GMMA auto kernel schedule` | L970 | **Auto picker** | `KernelScheduleType == KernelScheduleAuto`。这是**唯一一个「占位 type」spec**——内部按 (arch, dtype, tile) 启发式选 1-7 之一。`examples/48` 写 `KernelScheduleAuto` 落这 |
 
-sm100_common.inl                         ← sm100 公共 helper
-sm100_umma_builder.inl                   ← sm100 basic(Ch11 主要读这一份)
-sm100_sparse_umma_builder.inl            ← sm100 sparse
-sm100_blockscaled_umma_builder.inl       ← sm100 blockscaled(NVFP4 / MXFP8)
-sm100_blockscaled_sparse_umma_builder.inl← sm100 sparse + blockscaled
-sm100_blockscaled_mixed_tma_cpasync_umma_builder.inl ← sm100 blockscaled + TMA/cp.async 混合
-sm100_blockwise_umma_builder.inl         ← sm100 blockwise scaling
-sm100_mixed_input_umma_builder.inl       ← sm100 A/B 不同 dtype
-sm100_mixed_tma_cpasync_umma_builder.inl ← sm100 TMA/cp.async 混合
-sm100_cpasync_umma_builder.inl           ← sm100 纯 cp.async 路径(无 TMA)
-sm100_planar_complex_umma_builder.inl    ← sm100 planar complex
-sm100_interleaved_complex_umma_builder.inl ← sm100 interleaved complex
-sm100_9xBF16_umma_builder.inl            ← sm100 9xBF16 特殊格式
-sm100_9xBF16_interleaved_complex_umma_builder.inl ← sm100 9xBF16 + complex
-sm100_simt_builder.inl                   ← sm100 CUDA core(非 tensor core)
-sm100_pipeline_carveout.inl              ← sm100 pipeline stage 推导
+> ⚠ 一个常见误解:8 号 spec 是**唯一一个**——「`KernelScheduleAuto` 走哪条具体路径」在这里决定,不是在外层 dispatcher。auto 的逻辑写在 L970 的 partial spec 内部。
 
-sm103_blockscaled_umma_builder.inl       ← sm103 (Blackwell refresh) blockscaled
+#### dispatcher 怎么挑
 
-sm120_common.inl                         ← sm120 公共 helper
-sm120_mma_builder.inl                    ← sm120 basic
-sm120_sparse_mma_builder.inl             ← sm120 sparse
-sm120_blockscaled_mma_builder.inl        ← sm120 blockscaled
-sm120_blockscaled_sparse_mma_builder.inl ← sm120 sparse + blockscaled
-sm120_blockwise_mma_builder.inl          ← sm120 blockwise
-sm120_array_mma_builder.inl              ← sm120 grouped/ptr-array
+给定 13 个模板参数,编译器按以下顺序匹配:
 
-sm1xx_common.inl                         ← sm100/sm103 共享 helper
-sm1xx_sparse_config.inl                  ← sm100/sm103 sparse config
+```text
+先看 KernelScheduleType:
+  ├─ == KernelScheduleAuto        → spec 8(Auto picker,内部再选 1-7)
+  ├─ 含 FP8FastAccum 后缀 + FP8 input → spec 3
+  ├─ 含 CpAsync 前缀              → spec 6 或 7(看 is_use_rmem_A)
+  ├─ == KernelMultistage          → spec 5(已 deprecated)
+  ├─ == KernelTma(裸,无 WS 后缀)  → spec 4
+  └─ 含 WarpSpecialized* 后缀     → spec 1 或 2(看 is_use_rmem_A)
 ```
 
-#### 为什么不是一份
+**`is_use_rmem_A` 的判定**(切到 RS 的 4 个条件):在 `detail::deduce_mixed_width_dtype_t` 里查 `ElementA` 的类型——命中下列任一即走 RS:
 
-「为什么 CUTLASS 不写一个 `CollectiveBuilder` 处理所有情况?」三条理由:
+1. 命中 `is_use_rmem_A<ElementA, GmemLayoutATag, ElementB, GmemLayoutBTag>()`(Hopper 上的 RS-friendly layout 组合)
+2. `cute::is_tuple<ElementA>::value`(ConvertAndScale / ConvertAndScaleWithZero 这类带 scale 的复合 type)
+3. `cute::is_tuple<ElementB>::value`(同上,B 侧)
+4. `sizeof_bits<ElementA>::value != sizeof_bits<ElementB>::value`(A 和 B 不同 dtype,DirectConvert)
 
-1. **mma atom 来源不一样**:Hopper 走 `cute::GMMA::ss_op_selector<ElementA, ElementB, ElementAccumulator, TileShape_MNK>()`,Blackwell 走 `cute::UMMA::Major` + `tag_to_umma_major_A/B<...>()` 内联构造。**写 if-else 选哪一个会让模板深度爆炸**,partial specialization 各管一份是 C++ 模板元编程最干净的分流。
-2. **smem layout 多余字段不一样**:basic 没有 scale tensor,blockscaled 有 `SmemLayoutAtomSFA/B`(per-block scale 的 smem 布局),sparse 多了 E(2:4 元数据)的 smem 布局。**派生 `SmemLayoutA/B` 的代码不一样**,塞同一份 builder 会让 static_assert 拒编条件写得很乱。
-3. **compute_stage_count 不一样**:basic 用 `compute_stage_count_or_override`,blockscaled 用 `compute_stage_count_with_blockwise_scale`(每个 stage 字节数里多了 scale tensor),sparse 用 `compute_stage_count_or_override_sparse`。**3 个不同公式**,硬塞一个 builder 就要 `if constexpr` 分流。
+> 一句话:**SS 还是 RS 不由你显式选**,由「A 是 fp16 + B 是 fp8?」「A 是 tuple?」这些 type trait 自动决定——你写 `KernelTmaWarpSpecialized`,builder 看 element types 决定落到 spec 1 还是 2。
 
-所以每一份 `.inl` = 一份「(arch, feature) 的 partial specialization 集合」。CUTLASS 在 `collective_builder.hpp` 顶层把所有 `*.inl` 用 `#include` 串起来,让编译器看到所有 partial spec,按 13 个模板参数做 dispatcher 路由。
+#### 读哪个 spec
 
-#### 读哪一份
+| 你的 GEMM | 落到 spec | 主要新增字段 |
+|---|---|---|
+| `examples/48`(fp32 + `KernelScheduleAuto`)| 8 → 1 | — |
+| `examples/48` 写 `KernelTmaWarpSpecializedPingpong` | 1 | `IsCooperative = false`, `AtomLayoutMNK = Shape<_1,_1,_1>` |
+| fp16 × fp8 混合精度(`mixed_input.h`)| 2 | `ScaleA`, `ScaleB`, `ZeroA`, `ZeroB`(`deduce_mixed_width_dtype_t` 推)|
+| fp8 × fp8 + `KernelTmaWarpSpecializedFP8FastAccum` | 3 | `IsArrayOfPointersGemm` + `IsCooperative`,`AtomLayoutMNK` 同 spec 1,`static_assert(detail::is_input_fp8<...>)` |
+| 故意用 `KernelTma`(非 WS) | 4 | `DispatchPolicy = MainloopSm90TmaGmma`(而非 `*WarpSpecialized`)|
 
-按你的项目需要:
-
-| 你在做什么 | 读哪一份 |
-|---|---|
-| Hopper 普通 fp16/bf16 GEMM | `sm90_gmma_builder.inl`(Ch8 默认走这一份) |
-| Hopper 2:4 稀疏 | `sm90_sparse_gmma_builder.inl` |
-| Blackwell 普通 bf16/fp16 | `sm100_umma_builder.inl` |
-| Blackwell NVFP4 / MXFP8 | `sm100_blockscaled_umma_builder.inl`(`SmemLayoutAtomSFA/B` 在这) |
-| Blackwell 2:4 稀疏 | `sm100_sparse_umma_builder.inl` |
-| Blackwell A/B 不同 dtype | `sm100_mixed_input_umma_builder.inl` |
-| Blackwell grouped GEMM | `sm100_array_umma_builder.inl`(注意:array 在 sm100 上是独立的 builder,**不是** tag 选项) |
-| Blackwell CUDA core 路径 | `sm100_simt_builder.inl`(唯一非 tensor core 入口) |
-| 复数 GEMM | `sm100_planar_complex_umma_builder.inl` 或 `_interleaved_complex_umma_builder.inl`,按你存法选 |
-| SM120(consumer Blackwell)| `sm120_mma_builder.inl`(起步) |
-| SM120 grouped | `sm120_array_mma_builder.inl` |
-
-**debug 提示**:遇到「builder 推不出 partial spec」或「static_assert 报 `static_assert failed: ... CollectiveBuilder ...`」,**先翻这份清单**——多半是你要的 (arch, feature) 组合没在对应的 `.inl` 里,而你给的 tag 落到了错误的 spec。
+> **debug 提示**:遇到「`static_assert failed: ... CollectiveBuilder ...`」,**先翻这张表**——多半是你的 tag 落到了意料之外的 spec(例如你以为写的是 WS 但其实 spec 4 接管了,意味着「WS 路径被吞掉了」)。再看 L970 那段 auto picker 的注释,理解 auto 选了什么。
 
 ### 8.1 它的任务
 
@@ -248,8 +213,9 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 
 ### 8.6 章末:读完这一章你该做得到的事
 
-- ✅ 看清 `include/cutlass/gemm/collective/builders/` 下 33 份 `.inl` 的二维拆分(arch × feature),知道「为什么不是一份」(mma atom 来源、smem layout 多余字段、`compute_stage_count` 公式三者都随 (arch, feature) 变)。
-- ✅ 给一个具体配置"(fp16, RowMajor × ColMajor, 128×128×32, ClusterShape<_4,_2,_1>)",能从 33 份里挑出对应那份(`sm90_gmma_builder.inl`),并能**手算** builder 会推什么(AtomLayoutMNK、PipelineStages、SmemLayoutAtomA)。
+- ✅ 认清 `sm90_gmma_builder.inl` 里 8 个 partial specialization 的分流维度(gmem 路径 TMA/cp.async × WS/非 WS × SS/RS × FP8 fast-accum),并能根据 13 维模板参数推出自己的 GEMM 落到哪个 spec。
+- ✅ 知道 `is_use_rmem_A` 怎么决定 A 走 smem 还是 register,以及 `KernelScheduleAuto` 走的是 spec 8(internal auto picker)而非具体 spec。
+- ✅ 给一个具体配置"(fp16, RowMajor × ColMajor, 128×128×32, ClusterShape<_4,_2,_1>)",你能**手算** builder 会推什么(AtomLayoutMNK、PipelineStages、SmemLayoutAtomA)。
 - ✅ 能在 `sm90_gmma_builder.inl` 里读懂 partial specialization 的结构(挑 `KernelTmaWarpSpecialized` 那一个开始)。
 - ✅ 知道 `Auto*` 不是"运行时决定",而是编译期算。
 
