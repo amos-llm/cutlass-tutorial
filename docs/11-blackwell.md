@@ -12,7 +12,7 @@
 
 ### 11.2 什么变了:WGMMA → UMMA,smem 部分结果 → TMEM
 
-#### MMA:`WGMMA::ss_op_selector` → `UMMA::ss_op_selector`
+#### MMA:`cute::GMMA::ss_op_selector` → `cute::UMMA::Major`(不再有 selector)
 
 - **WGMMA**(sm_90):64xNxK(如 `SM90_64x16x16_F16F16F16F32_SS`);以 `wgmma.mma_async.sync.aligned.m64n...k16...` 的 PTX 指令形式发出,初始累加器 `(0.0)` 由调用方显式传入。
 - **UMMA**(sm_100):`tcgen05.mma` 系列;**异步 tensor 协程**——你写 launch 指令,GPU 自己决定何时启动;允许多 CTA 在 cluster 内共享时打平 bandwidth(`tcgen05.mma` 自身是 tensor 指令,不是 scalar 协程)。
@@ -86,7 +86,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 |不变|变|
 |---|---|
 |5 层框架(`GemmUniversalAdapter` / `GemmUniversal` / `CollectiveMma` / `CollectiveEpilogue` / `*TileScheduler`)类名与方法签名|Tag 树根换:`KernelTmaWarpSpecialized*` → `KernelTmaWarpSpecializedSm100*` / `KernelTmaWarpSpecialized1SmSm100` / `KernelTmaWarpSpecialized2SmSm100`(`include/cutlass/gemm/dispatch_policy.hpp`)|
-|Builder(`CollectiveBuilder`)的"用 13 维参数拼实例化"配方|MMA atom 来源:`WGMMA::ss_op_selector` → `UMMA::ss_op_selector`|
+|Builder(`CollectiveBuilder`)的"用 13 维参数拼实例化"配方|MMA atom 来源:sm90 走 `cute::GMMA::ss_op_selector<ElementA, ElementB, ElementAccumulator, TileShape_MNK>()`(`include/cute/atom/mma_traits_sm90_gmma.hpp`);sm100 走 `cute::UMMA::Major` + `tag_to_umma_major_A/B<GmemLayoutATag/B>()`,builder 内联构造 atom(`include/cute/atom/mma_traits_sm100.hpp`)|
 |`Examples/48` 的 4 步 host API 写法(`using` → builder → adapter → run)|对应 `Examples/70_blackwell_gemm/` 同样 4 步(逐行对应 Ch2)|
 |Ch5.4 的 EVT 写法(`Sm90EVT<Sm90Compute<...>, ...>`)|EVT 在 sm100 上由 sm100 epilogue 接管,但 AST 语法完全一致(根节点的算子是 `Sm100*Compute` 而不是 `Sm90*Compute`)|
 |`PersistentTileScheduler` 选 tile|sm100 新加 cluster 同步原语 `cluster_launch_control`(见 `media/docs/cpp/blackwell_cluster_launch_control.md`)|
