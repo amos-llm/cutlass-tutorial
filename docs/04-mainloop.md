@@ -661,13 +661,14 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 `KernelScheduleAuto` 就是按这条启发式选;用户写 `KernelTmaWarpSpecialized` / `_Pingpong` / `_Cooperative` 之一就是显式覆盖。**这些 tag 之间没有 C++ 继承关系**(Ch7)——是同辈空 struct,builder 用 `is_same_v` 硬枚举路由。
 
-### 4.12 图配
+### 4.12 本章没有合适的图
 
-下面两张图都在 Ch6 也用到——这里先放感受一下 pipeline 的物理样子:
+Ch4 之前引用过两张流水线图(`software-pipeline.png` + `cutlass-threadblock-mma-pipelined.png`),但**两张都不对**:
 
-![pipeline](../media/images/software-pipeline.png)
+- `cutlass-threadblock-mma-pipelined.png` 画的是 CUTLASS 2.x Ampere 时代的 `MmaPipelined` 类(`IteratorA / IteratorB` + `ReadableTileIterator` 概念),跟 Ch4 讲的 `CollectiveMma` + TMA + WGMMA + warp specialization 完全不是一个抽象层
+- `software-pipeline.png` 是通用 software-pipeline 图,没画 Hopper 的关键特征——producer/consumer warpgroup 分离、`smem_pipe_write` vs `smem_pipe_read` 的 stage 切换、TMA + mbarrier
 
-![threadblock mma pipelined](../media/images/cutlass-threadblock-mma-pipelined.png)
+CUTLASS 自带图集(`media/images/`)里**没有 Hopper 专属的 mainloop 流水线示意图**。Ch4 §4.4-§4.7 已经把 producer / consumer 各自的 K-loop 拆成 CuTe 计算步骤讲清,**用文字+表格描述比强行塞错时代的图好**。
 
 Ch4 把 mainloop 讲完了。下一章 Ch5 看 epilogue——几乎是镜像结构,但**写回**(而不是计算)+**EVT 融合算子**(而不是纯 mma)是主要差异。
 
