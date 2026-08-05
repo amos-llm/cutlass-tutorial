@@ -237,6 +237,23 @@ int run(Options& options) {
 
 > **为什么拆 3 段?** 因为 `Arguments → Params` 的转换**很重**——可能触发编译期模板实例化,甚至要做"先按某种 shape 试一下 size、再调"——所以拆开让你可以**先 can 再 init**,避免意外触发编译。
 
+### 2.5a callout:`ProblemShape` 静态 vs 动态——`examples/48` 是哪种?
+
+`Arguments` 里那个 `problem_shape` 不是普通整数,是 `cute::Shape<int, int, int, int>`(或 `cute::Shape<int64_t, ...>`)。这两种**差很多**:
+
+| 形态 | 类型签名 | 编译期 layout 校验 | 实例化数量 | 典型用法 |
+|---|---|---|---|---|
+| **静态** | `cute::Shape<int, int, int, int>`(每个 mode 是 `_N` 整型常量) | ✅ 跑得起来 | **每个不同 shape 一份 kernel**(M=2048 N=2048 / M=4096 各一份) | `examples/48`、所有 single-shape example |
+| **动态** | `cute::Shape<int64_t, ...>`(运行时整数) | ❌ 只能跑 layout 一致性 sanity check | **一份 kernel 接受任意 shape** | grouped GEMM、stream-K、batch service |
+
+`examples/48` 走静态 shape——host 端的 `M=2048 N=2048 K=2048` 通过 `make_shape(_2048{}, _2048{}, _2048{})` 传给 kernel,**这 3 个数在编译期就是整型常量**,所以 builder 推 smem layout、atom、TiledMma 时都能跑编译期检查,内层循环能完全展开。
+
+**为什么大多数 example 都是静态?** 因为静态 = 「编译期 layout 一致性 + smem alignment + mma 形状」全部 hard-check;动态 shape 拿到的是运行时的 `int64_t`,CuTe 只能做部分 sanity check,内层循环得 runtime dispatch,**编译器能优化的空间大幅缩窄**。代价就是「换 shape 重编译」。
+
+只有当你**真的**需要一份 kernel 接任意 shape(grouped GEMM / production inference / 一份 .so 服务所有 shape),才走动态。`examples/49`(Ch9)走的就是动态 shape。
+
+> 一句话:**静态 = 「编译期把 layout 烧死」,换来编译期校验和极致优化;动态 = 「运行时再算 layout」,换来一份 .so 通吃所有 shape。** 95% 的例子是静态,因为编译期校验是 CUTLASS 3.x 的最大卖点之一(Ch0.2「默认正确」那节)。
+
 ### 2.6 callout:`SharedStorage = union { MainloopStorage; EpilogueStorage; }`
 
 每一层(主 / 收尾)都有自己的 smem 需求,但 smem 是物理上一块。 CUTLASS 的惯例是:

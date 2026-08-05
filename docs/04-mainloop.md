@@ -201,7 +201,14 @@ mma(MainloopPipeline mainloop_pipeline,
 
 #### callout:`cute::gemm` 在 mainloop 里的实例化点
 
-这一行 `cute::gemm(TiledMma, smem_A_tile, smem_B_tile, accumulators)` 不只调用,还**实例化**——它根据 `TiledMma` 的 MMA atom / Layout,推到具体 WGMMA 指令(`wgmma.mma_async.sync.aligned.m64nXk16`). 这就是 Ch3.4 提到的 5-case dispatch 在 mainloop 的实际位置。
+这一行 `cute::gemm(TiledMma, smem_A_tile, smem_B_tile, accumulators)` 不只调用,还**实例化**——它根据 `TiledMma` 的 MMA atom / Layout,推到具体 WGMMA 指令(`wgmma.mma_async.sync.aligned.m64nXk16`). 这就是 Ch3.5 提到的 5-case dispatch 在 mainloop 的实际位置。
+
+具体两步:
+
+1. **从 `TiledMma` 拿到 atom**: `TiledMma` 内部存的就是一个 `MMA_Atom<...>`(Ch3.4 定义的),比如 `SM90_64x16x16_F32F16F16F32_SS`,以及 `AtomLayout`(`<_2,_2,_1>` 之类,Ch3.4 第二段)。
+2. **从 atom + Layout 推到具体 mma 指令**: `cute::gemm` 走 Ch3.5 的 5-case dispatch,根据 smem tile 的 layout rank(2D / 3D / V-mode)选 case;case 落到具体实现时,**从 atom 类型本身就推到了 PTX 字符串**(对 WGMMA atom,模板参数 `m64n16k16` 直接对应 `wgmma.mma_async.sync.aligned.m64n16k16`)。**所以同一行 `cute::gemm` 模板,换 atom 就换指令**——不需要 if-else。
+
+主 mainloop 里**没有 if-else 选 WGMMA / cp.async.mma / fp8**——所有「用哪条指令」的信息都封装在 `TiledMma` 内部的 atom 里。这就是为什么 builder 推 atom 是关键步骤(Ch8 §8.1 步骤 1)。
 
 ### 4.4 TMA descriptor(单线程预取)
 
@@ -249,6 +256,30 @@ auto neighbor_smem_A = cluster_collective_load(...);
 |`sm90_sparse_mma_tma_gmma_ss_warpspecialized_fp8.hpp`|2:4 structured sparsity + FP8|
 
 > Pingpong / Cooperative 变体在 **kernel 层**(`kernel/sm90_gemm_tma_warpspecialized_pingpong.hpp` / `_cooperative.hpp`),不是 collective 层文件。dispatch policy tag 路由后,它们复用同一个 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` collective mainloop,只换 kernel 编排逻辑。
+
+#### kernel 编排层的 3 个变体:WarpSpec / Pingpong / Cooperative
+
+注意: Ch4.6 上面那张表里的「变体」(SS/RS/FP8/sparse/grouped)改的是 **mainloop 内部**(数据从哪里来、什么 dtype);这里的 3 个变体改的是 **kernel 编排逻辑**(几个 warp group 一起算一个 CTA 的事)。后者是「**producer / consumer 怎么分工**」,跟 collective mainloop 解耦:
+
+| 变体 | 编排 | 适合 | 文件 |
+|---|---|---|---|
+| `KernelTmaWarpSpecialized` | **1 producer warpgroup + 1 consumer warpgroup**。producer 走 TMA 加载,consumer 走 WGMMA。固定分工,简单 | 中等 tile(BM/BN ≤ 128)| `kernel/sm90_gemm_tma_warpspecialized.hpp` |
+| `KernelTmaWarpSpecializedPingpong` | **1 producer + 2 consumer 交替**(软硬流水线重叠加倍)| 中大 tile(BM/BN ≈ 128) | `kernel/sm90_gemm_tma_warpspecialized_pingpong.hpp` |
+| `KernelTmaWarpSpecializedCooperative` | **1 producer + N 个 consumer 协同**算一个超大 tile(每个 consumer 算 tile 的一部分,WGMMA 之间互不重叠)| **巨型 tile**(BM=256 / BN=256 这种) | `kernel/sm90_gemm_tma_warpspecialized_cooperative.hpp` |
+
+机制差别一句话:
+
+- **WarpSpec**: 1 个 consumer warpgroup 负责整个 tile 的 WGMMA,K-loop 串行。最简单、stage 数最少、对 smem 压力最小。问题是单 consumer 算 128×128 的 tile 已经是它的带宽上限,再大就瓶颈。
+- **Pingpong**: 2 个 consumer **交替**——一个跑 K-step 0、另一个跑 K-step 1,软硬流水线叠加。每个 consumer 算**整个** tile,所以 K-loop 总吞吐 = 2 × 单 consumer 带宽。代价:smem pipeline 要 **double buffer**(stage 数 × 2)、smem 压力大。适合中等 tile 想再压一压。
+- **Cooperative**: N 个 consumer **协同**算一个 tile,每个 consumer 只算 tile 的 **1/N**(比如 4 个 consumer 每人算 128×32)。tile 整体很大时,这种切分让每个 consumer 的 smem footprint 变小,可以塞更多 stage;同时 K-loop 总吞吐 = N × 单 consumer 带宽。代价:consumer 之间需要协调(谁负责哪个子区域),dispatch policy 里要算清楚 fragment 切分。
+
+**怎么选?** 经验启发式(具体见 Ch8 的 `media/docs/cpp/heuristics.md` + `python/cutlass_library/heuristics.py`):
+
+- BM × BN ≤ 128 × 128:WarpSpec 够用,smem 压力最小。
+- 128 × 128 ~ 256 × 128:Pingpong 收益明显。
+- ≥ 256 × 256:Cooperative 才喂得满。
+
+`KernelScheduleAuto` 就是按这条启发式选;用户写 `KernelTmaWarpSpecialized` / `_Pingpong` / `_Cooperative` 之一就是显式覆盖。**这些 tag 之间没有 C++ 继承关系**(Ch7)——是同辈空 struct,builder 用 `is_same_v` 硬枚举路由。
 
 ### 4.7 图配
 

@@ -14,7 +14,7 @@
 |`prepare_gmem_desc(...)` 写 TMA desc|`collective::CollectiveBuilder` 内部 + `prefetch_tma_descriptors(...)`|Ch2.5 + Ch4.4|
 |`cuTensorMapEncodeTiled(...)`|`cute::TmaDescriptor` 包装|附录 A|
 |TMA load `cp.async.bulk.tensor.*`|`cute::copy(SM90_TMA_LOAD, ...)`|Ch4.3|
-|`wgmma.mma_async.sync.aligned.m64n...k16...`(单条)|`cute::gemm(TiledMma, A_frag, B_frag, acc)` (内部 dispatch 到该指令)|Ch3.4|
+|`wgmma.mma_async.sync.aligned.m64n...k16...`(单条)|`cute::gemm(TiledMma, A_frag, B_frag, acc)` (内部 dispatch 到该指令)|Ch3.5|
 |`is_producer = warpIdx < 4` 分支|`WarpGroupRole { Producer, Consumer }` + `kernel/.../operator()`|Ch6.3|
 |producer/consumer 屏障数组(`bar[N]`)|`cutlass::PipelineTmaAsync<N>`|Ch4.2 + Ch6.4|
 |`__syncthreads()` 同步 producer/consumer|`PipelineTmaAsync::producer_acquire / producer_commit / consumer_wait / consumer_release`|Ch4.3|

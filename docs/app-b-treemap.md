@@ -27,9 +27,9 @@
 |**CuTe Layout primer**|`media/docs/cpp/cute/01_layout.md`|Ch3 — 教材级长文,可复读|
 |**CuTe Layout 代数**|`media/docs/cpp/cute/02_layout_algebra.md`|Ch3 — composition / coalesce / zipped-divide 等|
 |**CuTe Tensor = Engine + Layout**|`media/docs/cpp/cute/03_tensor.md`|Ch3|
-|**CuTe Algorithms (copy / gemm / clear)**|`media/docs/cpp/cute/04_algorithms.md`|Ch3.4 — `cute::gemm` 的来源|
-|**CuTe MMA atom naming**|`media/docs/cpp/cute/0t_mma_atom.md`|Ch3.5|
-|**CuTe GEMM 实战教程**|`media/docs/cpp/cute/0x_gemm_tutorial.md`|Ch3.5 — 配 `examples/cute/tutorial/sgemm_*.cu`|
+|**CuTe Algorithms (copy / gemm / clear)**|`media/docs/cpp/cute/04_algorithms.md`|Ch3.5 — `cute::gemm` 的来源|
+|**CuTe MMA atom naming**|`media/docs/cpp/cute/0t_mma_atom.md`|Ch3.6|
+|**CuTe GEMM 实战教程**|`media/docs/cpp/cute/0x_gemm_tutorial.md`|Ch3.6 — 配 `examples/cute/tutorial/sgemm_*.cu`|
 |**CuTe 残差 / predication**|`media/docs/cpp/cute/0y_predication.md`|(本文未引入)|
 |**CuTe + TMA**|`media/docs/cpp/cute/0z_tma_tensors.md`|Ch4 — 读懂 TMA + CuTe 联合用法|
 
