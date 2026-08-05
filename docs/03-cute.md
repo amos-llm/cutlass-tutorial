@@ -40,7 +40,7 @@ using DynamicShape         = Shape<int, int, int>;       // 运行期 3-tuple
 using MixedShape           = Shape<_128, _128, int>;     // 1+2 前两者编译期
 ```
 
-`_N` 是 `Int<N>` 的 alias,语义是"一个值为 N 的类型"。`Shape` 是 `tuple<...>`,所以你只能 `get&lt;i&gt;` 访问,CUTLASS 大量这种"tuple of compile-time ints"模式,用模板元编程做下标计算。
+`_N` 是 `Int<N>` 的 alias,语义是"一个值为 N 的类型"。`Shape` 是 `tuple<...>`,所以你只能 `get<i>` 访问,CUTLASS 大量这种"tuple of compile-time ints"模式,用模板元编程做下标计算。
 
 > 你写 `TileShape = Shape<_128, _128, _32>`,CUDA 编译器会**完全**把这些数字 bake 进代码——没有运行时开销。
 
