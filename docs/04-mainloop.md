@@ -4,7 +4,7 @@
 
 主文件:`include/cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized.hpp`。
 
-本章主线:**跟着 producer / consumer 各自的 K-loop,把里面每一步 CuTe 计算**(layout 摊分、smem Tensor 构造、rmem fragment 分配、`cute::gemm` 推到 WGMMA)**逐个拆开**。每段都标对应源文件的行号,可以直接 `vim +` 跳过去对照。
+本章主线:**跟着 producer / consumer 各自的 K-loop,把里面每一步 CuTe 计算**(layout 摊分、smem Tensor 构造、rmem fragment 分配、`cute::gemm` 推到 WGMMA)**逐个拆开**。
 
 读法:**从类头部分支开始 → 类型别名 → 8 个方法的角色 → `load_init` 怎么构造 CuTe 视图 → `load` 里 producer 怎么发 TMA → `mma` 里 consumer 怎么推到 WGMMA → 收尾**。
 
@@ -92,10 +92,10 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
 
 | 阶段 | 调什么 | 做什么 |
 |---|---|---|
-| **setup**(host)| `to_underlying_arguments` (L202) + `can_implement` (L242) | host 端把 runtime `Arguments` 烧成 `Params`,顺带把 TMA descriptor 编好 |
-| **setup**(device, kernel 入口)| `prefetch_tma_descriptors` (L271) + `load_init` (L284) | 把 TMA desc 提到 L1;构造 CuTe gmem 视图 `(gA_mkl, gB_nkl)` |
-| **K-loop**(device)| producer 调 `load` (L309);consumer 调 `mma` (L416) | TMA 拉数据 + WGMMA 算,流水线并发 |
-| **teardown**(device)| producer 调 `load_tail` (L394);consumer 调 `mma_tail` (L561) | 等 K-loop 收尾,做 cluster 防早退 + 异步 mma fence |
+| **setup**(host)| `to_underlying_arguments` + `can_implement` | host 端把 runtime `Arguments` 烧成 `Params`,顺带把 TMA descriptor 编好 |
+| **setup**(device, kernel 入口)| `prefetch_tma_descriptors` + `load_init` | 把 TMA desc 提到 L1;构造 CuTe gmem 视图 `(gA_mkl, gB_nkl)` |
+| **K-loop**(device)| producer 调 `load`;consumer 调 `mma` | TMA 拉数据 + WGMMA 算,流水线并发 |
+| **teardown**(device)| producer 调 `load_tail`;consumer 调 `mma_tail` | 等 K-loop 收尾,做 cluster 防早退 + 异步 mma fence |
 
 把 K-loop 接力赛跑想象成:
 
@@ -111,7 +111,7 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
 
 ### 4.4 `load_init`:CuTe gmem 视图的构造
 
-源码 L284-301,**kernel 入口各调一次**(producer / consumer 都要拿到 gmem 视图)。
+源码对应段:**`load_init`** 函数体,**kernel 入口各调一次**(producer / consumer 都要拿到 gmem 视图)。
 
 ```cpp
 template <class ProblemShape_MNKL>
@@ -135,9 +135,9 @@ load_init(ProblemShape_MNKL const& problem_shape_MNKL,
 
 #### 4.4.1 `get_tma_tensor(make_shape(M,K,L))` — 从 TMA desc 拿 gmem Tensor
 
-`mainloop_params.tma_load_a` 是 `Params::TMA_A`(L217 由 `make_tma_copy_A_sm90` 构造),本质是个 **TMA descriptor + 对应的 CuTe Atom**。`get_tma_tensor(shape)` 返回一个 `cute::Tensor`,**底层指针来自 TMA descriptor**,layout 来自 desc 编进去的 stride:
+`mainloop_params.tma_load_a` 是 `Params::TMA_A`(由 `to_underlying_arguments` 里 `make_tma_copy_A_sm90` 构造),本质是个 **TMA descriptor + 对应的 CuTe Atom**。`get_tma_tensor(shape)` 返回一个 `cute::Tensor`,**底层指针来自 TMA descriptor**,layout 来自 desc 编进去的 stride:
 
-- **底层 ptr**: TMA desc 编进去的 `ptr_A`(L211)
+- **底层 ptr**: TMA desc 编进去的 `ptr_A`
 - **layout**: TMA desc 编进去的 stride + 用户给的 `make_shape(M, K, L)`
 - **数据类型**: `ElementA`(fp16 / bf16 / fp8 等)
 
@@ -167,11 +167,11 @@ Mode index:  0      1      2
 
 #### 4.4.3 返回的 `tuple<gA_mkl, gB_nkl>` 是 collective / kernel 之间的契约
 
-L280-282 注释明确:**"first two elements must be gA_mkl and gB_nkl"**。这是 **kernel 层能依赖的契约**——kernel orchestrator(Ch6)只知道这俩名字,具体 layout 怎么切由 collective 推。**契约的好处**:换 collective 实现(比如从 SS 换 RS,或 sm90 换 sm100),kernel 代码不动。
+`load_init` 函数体末尾的注释明确:**"first two elements must be gA_mkl and gB_nkl"**。这是 **kernel 层能依赖的契约**——kernel orchestrator(Ch6)只知道这俩名字,具体 layout 怎么切由 collective 推。**契约的好处**:换 collective 实现(比如从 SS 换 RS,或 sm90 换 sm100),kernel 代码不动。
 
 ### 4.5 `load`:producer 的 CuTe 流程
 
-源码 L309-392,**单线程执行**(靠 `cute::elect_one_sync()`),每个 K-tile 调一次。
+源码对应段:**`load`** 函数体,**单线程执行**(靠 `cute::elect_one_sync()`),每个 K-tile 调一次。
 
 ```cpp
 CUTLASS_DEVICE void
@@ -299,7 +299,7 @@ K-loop 的循环次数 `k_tile_count` 是**运行时**(K / Stages_t大小),不�
 
 ### 4.6 `mma`:consumer 的 CuTe 流程
 
-源码 L416-559,**全部 consumer warpgroup 线程都执行**(不只是单线程)。这是 Ch4 最长、最重要的函数。
+源码对应段:**`mma`** 函数体,**全部 consumer warpgroup 线程都执行**(不只是单线程)。这是 Ch4 最长、最重要的函数。
 
 ```cpp
 template <class FrgTensorC>
@@ -440,7 +440,7 @@ Tensor tCrB = thread_mma.make_fragment_B(tCsB);
 
 #### 4.6.5 shape 校验的 5 个 `CUTE_STATIC_ASSERT_V`
 
-L463-468:
+对应的 5 个 static_assert 块:
 
 ```cpp
 CUTE_STATIC_ASSERT_V(size<1>(tCsA) == size<1>(accum));    // M 维度匹配 accum
@@ -462,13 +462,13 @@ tiled_mma.accumulate_ = GMMA::ScaleOut::One;      // ← 后续: 累加
 
 WGMMA 指令有个 scale-out 控制位 `accumulate?`(PTX 层 `A` bit):0 = `D = A*B + 0`(从 0 写),1 = `D = A*B + C`(累加到 C)。**第一次 mma 必须 `Zero`**——`accum` 没初始化过,累加垃圾。**之后的所有 mma 都 `One`**——把 `(M,N)` sub-tile 累加到同一个 accum 上。
 
-**注意**: `tiled_mma.accumulate_` 是 TiledMma 的运行时成员,**`tiled_mma` 是按值赋值的**(L453 `TiledMma tiled_mma;`),所以改 `accumulate_` 不会影响其它 thread / warpgroup / 之前创建的 thread_mma view。
+**注意**: `tiled_mma.accumulate_` 是 TiledMma 的运行时成员,**`tiled_mma` 是按值赋值的**(`TiledMma tiled_mma;` 这一行),所以改 `accumulate_` 不会影响其它 thread / warpgroup / 之前创建的 thread_mma view。
 
 `CUTLASS_PRAGMA_UNROLL for k_block`: 内层 K 维 sub-block 循环**强制 unroll**(因为 `size<2>(tCrA) = BlockK / 16` 是编译期常量)。每个 k_block 对应一次 `cute::gemm` → 一条 `wgmma.mma_async.sync.aligned.m64n...k16...`。
 
 #### 4.6.7 ⑥ prologue 剩余 tile + ⑦ mainloop:`warpgroup_wait` 是关键
 
-mainloop 里 (L546-555) 的关键 3 步:
+mainloop 里 K-loop 体的关键 3 步:
 
 ```cpp
 cute::gemm(...);                 // 发 WGMMA(异步,提交后 GPU 内部流水)
@@ -484,7 +484,7 @@ pipeline.consumer_release(smem_pipe_release);   // 等 mma 完成才能 release!
 
 WGMMA 是**异步**——`cute::gemm` 调完不代表算完,GPU 还在内部流水。如果不 wait 就 `consumer_release` smem,producer 立刻往同一 stage 写新数据,**会冲掉正在读的 WGMMA 输入**。
 
-`K_PIPE_MMAS = 1` (L264): 一次只允许 1 个 mma in-flight,所以 consumer 一次 release 一个 stage 就够。**如果有更多 stage,可以把 K_PIPE_MMAS 调大,smem pipeline 更深,但 smem 占用也更大**。
+`K_PIPE_MMAS = 1`: 一次只允许 1 个 mma in-flight,所以 consumer 一次 release 一个 stage 就够。**如果有更多 stage,可以把 K_PIPE_MMAS 调大,smem pipeline 更深,但 smem 占用也更大**。
 
 `warpgroup_fence_operand(accum)`: mma 提交前后各加一次,**保证 `accum` 寄存器对 warpgroup fence 的可见性**——这是 Hopper warpgroup 指令的特化 fence,跟 `__threadfence_block()` 不是一回事。
 
@@ -519,7 +519,7 @@ wgmma.mma_async.sync.aligned.m64n16k16.f32.f16.f16.f32
 
 ### 4.7 `load_tail` + `mma_tail`:K-loop 收尾
 
-源码 L394-409 (load_tail) + L561-577 (mma_tail)。
+源码对应段:**`load_tail`** + **`mma_tail`** 两个函数体。
 
 #### 4.7.1 `load_tail` —— 防 cluster 早退
 
@@ -591,16 +591,16 @@ producer 和 consumer 之间的契约**只通过两类东西传**:
 
 8 个方法的简要总结(完整版本见每个子节):
 
-| # | 方法 | 行号 | 谁调 | 关键 CuTe 计算 |
-|---|---|---|---|---|
-| 1 | `to_underlying_arguments` | L202 | host 一次 | `make_tma_copy_A/B_sm90` 编 TMA descriptor |
-| 2 | `can_implement` | L242 | host 一次 | `check_alignment` TMA 128-bit 对齐 |
-| 3 | `prefetch_tma_descriptors` | L271 | device 单线程 | `prefetch_tma_descriptor` 提 desc 到 L1 |
-| 4 | `load_init` | L284 | device 每 warpgroup | `get_tma_tensor` + `local_tile` 构 gmem 视图 |
-| 5 | `load` | L309 | producer K-loop | `make_tensor` smem view + `get_slice` cluster 分摊 + `partition_S/D` TMA thread 摊分 + `copy` 发 TMA |
-| 6 | `load_tail` | L394 | producer 一次 | `producer_tail` 防 cluster 早退踢 L2 |
-| 7 | `mma` | L416 | consumer K-loop | `get_slice` warpgroup 切 TiledMma + `partition_A/B` smem 摊分 + `make_fragment_A/B` rmem 分配 + `warpgroup_fence/arrive/commit/wait` async mma 同步 + `cute::gemm` 推 WGMMA |
-| 8 | `mma_tail` | L561 | consumer 一次 | `warpgroup_wait<0>` 等所有 mma retire |
+| # | 方法 | 谁调 | 关键 CuTe 计算 |
+|---|---|---|---|
+| 1 | `to_underlying_arguments` | host 一次 | `make_tma_copy_A/B_sm90` 编 TMA descriptor |
+| 2 | `can_implement` | host 一次 | `check_alignment` TMA 128-bit 对齐 |
+| 3 | `prefetch_tma_descriptors` | device 单线程 | `prefetch_tma_descriptor` 提 desc 到 L1 |
+| 4 | `load_init` | device 每 warpgroup | `get_tma_tensor` + `local_tile` 构 gmem 视图 |
+| 5 | `load` | producer K-loop | `make_tensor` smem view + `get_slice` cluster 分摊 + `partition_S/D` TMA thread 摊分 + `copy` 发 TMA |
+| 6 | `load_tail` | producer 一次 | `producer_tail` 防 cluster 早退踢 L2 |
+| 7 | `mma` | consumer K-loop | `get_slice` warpgroup 切 TiledMma + `partition_A/B` smem 摊分 + `make_fragment_A/B` rmem 分配 + `warpgroup_fence/arrive/commit/wait` async mma 同步 + `cute::gemm` 推 WGMMA |
+| 8 | `mma_tail` | consumer 一次 | `warpgroup_wait<0>` 等所有 mma retire |
 
 ### 4.10 Cluster 维度:CTA 间协作
 

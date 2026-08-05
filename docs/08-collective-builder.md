@@ -16,20 +16,20 @@
 
 #### 8 个 spec 的全表
 
-`sm90_gmma_builder.inl` 按文件里的 `// 名字` 注释标注(行号对应 `include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`):
+`sm90_gmma_builder.inl` 按文件里的 `// 名字` 注释标注:
 
-| # | 文件里名字 | 行号 | 三个开关组合 | 备注 |
-|---|---|---|---|---|
-| 1 | `GMMA_TMA_WS_SS` | L195 | **TMA + WS + SS** | **默认路径** — `examples/48` 落这。`KernelTmaWarpSpecialized`(及 Pingpong / Cooperative、PtrArray 变体)+ A 走 smem |
-| 2 | `GMMA_TMA_WS_RS` | L313 | **TMA + WS + RS** | 同 WS tag 5 个 + `is_use_rmem_A` 命中。A 留 register 跨 mma step(mixed precision,ConvertAndScale,DirectConvert,A/B 不同 dtype)|
-| 3 | `GMMA_TMA_WS_FP8_FAST_ACCUM_SS` | L510 | **TMA + WS + SS + FP8 fast-accum** | tag 5 个 `_FP8FastAccum` 后缀 + 输入必须 FP8。走硬件 fast-accum(不经过 fp32 中转)|
-| 4 | `GMMA_TMA_SS` | L619 | **TMA + 非 WS + SS** | 旧式 `KernelTma`(所有人又加载又计算)+ SS。Ampere 时代的「非 warp-specialized」,Hopper 上仍能编译但**没优化收益** |
-| 5 | `GMMA_CpAsync` | L706 | **cp.async + `KernelMultistage`** | **`[[deprecated]]` 标记**(L707) — 内部直接转发到 `KernelCpAsyncWarpSpecialized`(L731-734),用户写 `KernelMultistage` 会触发 deprecation 警告,新代码不该用 |
-| 6 | `GMMA_CpAsync_WS_SS` | L758 | **cp.async + WS + SS** | `KernelCpAsyncWarpSpecialized`(及 Pingpong / Cooperative)+ SS。**Ampere 上**`examples/14_ampere_tf32_tensorop_gemm/` 落这;Hopper 上也能用但**不推荐**(TMA 路径收益更大) |
-| 7 | `GMMA_CpAsync_WS_RS` | L861 | **cp.async + WS + RS** | 同 3 个 cp.async WS tag + `is_use_rmem_A` 命中 |
-| 8 | `GMMA auto kernel schedule` | L970 | **Auto picker** | `KernelScheduleType == KernelScheduleAuto`。这是**唯一一个「占位 type」spec**——内部按 (arch, dtype, tile) 启发式选 1-7 之一。`examples/48` 写 `KernelScheduleAuto` 落这 |
+| # | 文件里名字 | 三个开关组合 | 备注 |
+|---|---|---|---|
+| 1 | `GMMA_TMA_WS_SS` | **TMA + WS + SS** | **默认路径** — `examples/48` 落这。`KernelTmaWarpSpecialized`(及 Pingpong / Cooperative、PtrArray 变体)+ A 走 smem |
+| 2 | `GMMA_TMA_WS_RS` | **TMA + WS + RS** | 同 WS tag 5 个 + `is_use_rmem_A` 命中。A 留 register 跨 mma step(mixed precision,ConvertAndScale,DirectConvert,A/B 不同 dtype)|
+| 3 | `GMMA_TMA_WS_FP8_FAST_ACCUM_SS` | **TMA + WS + SS + FP8 fast-accum** | tag 5 个 `_FP8FastAccum` 后缀 + 输入必须 FP8。走硬件 fast-accum(不经过 fp32 中转)|
+| 4 | `GMMA_TMA_SS` | **TMA + 非 WS + SS** | 旧式 `KernelTma`(所有人又加载又计算)+ SS。Ampere 时代的「非 warp-specialized」,Hopper 上仍能编译但**没优化收益** |
+| 5 | `GMMA_CpAsync` | **cp.async + `KernelMultistage`** | **`[[deprecated]]` 标记** — 内部直接转发到 `KernelCpAsyncWarpSpecialized`,用户写 `KernelMultistage` 会触发 deprecation 警告,新代码不该用 |
+| 6 | `GMMA_CpAsync_WS_SS` | **cp.async + WS + SS** | `KernelCpAsyncWarpSpecialized`(及 Pingpong / Cooperative)+ SS。**Ampere 上**`examples/14_ampere_tf32_tensorop_gemm/` 落这;Hopper 上也能用但**不推荐**(TMA 路径收益更大) |
+| 7 | `GMMA_CpAsync_WS_RS` | **cp.async + WS + RS** | 同 3 个 cp.async WS tag + `is_use_rmem_A` 命中 |
+| 8 | `GMMA auto kernel schedule` | **Auto picker** | `KernelScheduleType == KernelScheduleAuto`。这是**唯一一个「占位 type」spec**——内部按 (arch, dtype, tile) 启发式选 1-7 之一。`examples/48` 写 `KernelScheduleAuto` 落这 |
 
-> ⚠ 一个常见误解:8 号 spec 是**唯一一个**——「`KernelScheduleAuto` 走哪条具体路径」在这里决定,不是在外层 dispatcher。auto 的逻辑写在 L970 的 partial spec 内部。
+> ⚠ 一个常见误解:8 号 spec 是**唯一一个**——「`KernelScheduleAuto` 走哪条具体路径」在这里决定,不是在外层 dispatcher。auto 的逻辑写在那个 partial spec 内部。
 
 #### dispatcher 怎么挑
 
@@ -64,7 +64,7 @@
 | fp8 × fp8 + `KernelTmaWarpSpecializedFP8FastAccum` | 3 | `IsArrayOfPointersGemm` + `IsCooperative`,`AtomLayoutMNK` 同 spec 1,`static_assert(detail::is_input_fp8<...>)` |
 | 故意用 `KernelTma`(非 WS) | 4 | `DispatchPolicy = MainloopSm90TmaGmma`(而非 `*WarpSpecialized`)|
 
-> **debug 提示**:遇到「`static_assert failed: ... CollectiveBuilder ...`」,**先翻这张表**——多半是你的 tag 落到了意料之外的 spec(例如你以为写的是 WS 但其实 spec 4 接管了,意味着「WS 路径被吞掉了」)。再看 L970 那段 auto picker 的注释,理解 auto 选了什么。
+> **debug 提示**:遇到「`static_assert failed: ... CollectiveBuilder ...`」,**先翻这张表**——多半是你的 tag 落到了意料之外的 spec(例如你以为写的是 WS 但其实 spec 4 接管了,意味着「WS 路径被吞掉了」)。再看 auto picker 那段的注释,理解 auto 选了什么。
 
 ### 8.1 它的任务
 
