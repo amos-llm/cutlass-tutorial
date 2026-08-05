@@ -83,7 +83,7 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
 - 内部有 `FullBarrier[N]` 和 `EmptyBarrier[N]`——N 对 barrier 信号,`producer_acquire / producer_commit / consumer_wait / consumer_release` 操作屏障
 - 这是 CUTLASS 实现"流水线 producer/consumer 同步"的底层原语。Mainloop 和 epilogue 都用。
 
-> **你手写 GEMM 的对照**:你写 `__threadfence_block()` / `__syncthreads()` + 手动维护的 barrier 数组。`PipelineTmaAsync<Stages>` 就是"自动循环 barrier 的 box"。
+> **你手写 GEMM 的对照**:你写 raw `mbarrier.*` PTX(`mbarrier.try_wait.parity` / `mbarrier.arrive.expect_tx`)+ `__syncthreads()` + 手动维护的 stage 状态。`PipelineTmaAsync<Stages>` 就是把这套封装起来。**不要写 `__threadfence_block()`**:那是 Ampere 之前 cp.async 还没硬件 barrier 时的 workaround,Hopper mbarrier 自带 release/acquire 语义,再写就冗余。
 
 ### 4.3 实际存在的 mainloop 方法(`sm90_mma_tma_gmma_ss_warpspecialized.hpp`)
 
