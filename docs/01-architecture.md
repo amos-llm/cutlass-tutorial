@@ -128,11 +128,11 @@ struct CollectiveEpilogue {
 
 ```cpp
 struct PersistentTileSchedulerSm90 {
-  // 在 kernel 入口被每个 CTA 调用,决定它跑哪个 tile
-  WorkTileInfo get_current_work();
+  // 在 kernel 主循环被调用,决定这一轮跑哪个 tile — 返回 pair<next, increment_pipe>
+  cute::tuple<WorkTileInfo, bool> fetch_next_work(WorkTileInfo prev);
 
-  // 在 epilogue 之后调用,推进到下一个 tile
-  void advance();
+  // sm100 CLC 路径专用:用 clc pipeline + state 推进
+  PipelineState advance_to_next_work(Pipeline&, PipelineState) const;
 };
 ```
 
@@ -147,7 +147,7 @@ arguments.scheduler.max_swizzle_size = options.swizzle;      // 1 / 2 / 4 / 8
 
 ### 1.6 三句话侧栏:这些 `sm90_*_warpspecialized` 文件不是"5 个不同实现"
 
-看到 `include/cutlass/gemm/collective/` 下有几十个 `sm90_*_warpspecialized*.hpp` 不要慌——它们是**同一个 partial specialization 的 6 种维度变体**:
+看到 `include/cutlass/gemm/collective/` 下有几十个 `sm90_*_warpspecialized*.hpp` 不要慌——它们是**同一个 partial specialization 在 4 个维度上的变体**:
 
 |维度|取值|
 |---|---|

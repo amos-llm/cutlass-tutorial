@@ -14,8 +14,8 @@
 
 #### MMA:`WGMMA::ss_op_selector` → `UMMA::ss_op_selector`
 
-- **WGMMA**(sm_90):64xNxK(SM90_64x16x16_F16F16F16F32_SS 等);用户代码中=mma(0.0) 的形式由原子指令直接控制。
-- **UMMA**(sm_100):`tcgen05.mma` 系列;**异步的标量协程**——你写 launch 指令,GPU 自己决定何时启动;**允许多 ct 在 cluster 内共享时打平 bandwidth**。
+- **WGMMA**(sm_90):64xNxK(如 `SM90_64x16x16_F16F16F16F32_SS`);以 `wgmma.mma_async.sync.aligned.m64n...k16...` 的 PTX 指令形式发出,初始累加器 `(0.0)` 由调用方显式传入。
+- **UMMA**(sm_100):`tcgen05.mma` 系列;**异步 tensor 协程**——你写 launch 指令,GPU 自己决定何时启动;允许多 CTA 在 cluster 内共享时打平 bandwidth(`tcgen05.mma` 自身是 tensor 指令,不是 scalar 协程)。
 
 UMMA 7 条指令,`media/docs/cpp/blackwell_functionality.md` 列了出来(经典对比表):
 
@@ -51,7 +51,7 @@ umma(...).to(tmem_alloc);     // 直接落到 tmem
 |Adapter|`gemm_universal_adapter.h`(完全一致)|同|
 |Kernel orchestrator|`kernel/sm90_gemm_tma_warpspecialized.hpp`|`kernel/sm100_gemm_tma_warpspecialized.hpp`|
 |Mainloop|`collective/sm90_mma_tma_gmma_ss_warpspecialized.hpp`|`collective/sm100_mma_warpspecialized.hpp`(还有 sm100_mma_cpasync_warpspecialized.hpp 等变体)|
-|Epilogue|`epilogue/collective/sm90_epilogue_tma_warpspecialized.hpp`|(mainloop 文件已包含 epilogue 路径;sm100 不会单写 epilogue)|
+|Epilogue|`epilogue/collective/sm90_epilogue_tma_warpspecialized.hpp`|`epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp`(sm100 有独立 epilogue 文件,以及 `sm100_epilogue_array_tma_warpspecialized.hpp` 等变体)|
 |Scheduler|`kernel/sm90_tile_scheduler.hpp`|`kernel/sm100_tile_scheduler.hpp`(多 `cluster_launch_control`)|
 
 ### 11.3 新类型宇宙:block-scaled(mx_*)与窄精度
@@ -85,7 +85,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 |不变|变|
 |---|---|
-|5 层框架(`GemmUniversalAdapter` / `GemmUniversal` / `CollectiveMma` / `CollectiveEpilogue` / `*TileScheduler`)类名与方法签名|Tag 树根换:`KernelTmaWarpSpecialized*` → `KernelTmaUmmaWarpspecialized*`(`include/cutlass/gemm/dispatch_policy.hpp`)|
+|5 层框架(`GemmUniversalAdapter` / `GemmUniversal` / `CollectiveMma` / `CollectiveEpilogue` / `*TileScheduler`)类名与方法签名|Tag 树根换:`KernelTmaWarpSpecialized*` → `KernelTmaWarpSpecializedSm100*` / `KernelTmaWarpSpecialized1SmSm100` / `KernelTmaWarpSpecialized2SmSm100`(`include/cutlass/gemm/dispatch_policy.hpp`)|
 |Builder(`CollectiveBuilder`)的"用 13 维参数拼实例化"配方|MMA atom 来源:`WGMMA::ss_op_selector` → `UMMA::ss_op_selector`|
 |`Examples/48` 的 4 步 host API 写法(`using` → builder → adapter → run)|对应 `Examples/70_blackwell_gemm/` 同样 4 步(逐行对应 Ch2)|
 |Ch5.4 的 EVT 写法(`Sm90EVT<Sm90Compute<...>, ...>`)|EVT 在 sm100 上由 sm100 epilogue 接管,但 AST 语法完全一致(根节点的算子是 `Sm100*Compute` 而不是 `Sm90*Compute`)|

@@ -1,8 +1,8 @@
 ## 第 5 章:深入 CollectiveEpilogue + EVT
 
-Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(TMA store D)、同用 pipeline、同 swizzle、同 swappable 接口。区别只在:
+Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(算子)→smem(D 缓存)→gmem(TMA store D)、同用 pipeline、同 swizzle、同 swappable 接口。区别只在:
 
-1. 数据流方向反过来:把 accumulator 通过 TMA store 写到 gmem。
+1. 数据流方向反过来:把 accumulator 通过 TMA store 写到 gmem(TMA store 本身是从 smem 到 gmem,所以 epilogue 还要先把转换后的 D 元素写到 smem)。
 2. **可能插一段融合算子**——bias、ReLU、silu、top-K softmax、scale、swizzle output 等。
 3. 调度的细颗粒度更细:有专门的 `StagesC` (C load 阶段) / `StagesD` (D store 阶段),可以独立调。
 
@@ -28,13 +28,13 @@ struct Sm90TmaWarpSpecialized
 
 5 个参数分别在做什么:
 
-|参数|默认值|含义|
+|参数|默认(由 builder 算)|含义|
 |---|---|---|
-|`StagesC`|auto|C 加载阶段数(从 C 到 register 的流水线深度)|
-|`StagesD`|auto|D store 阶段数(register 到 smem 再到 gmem 的流水线深度)|
-|`FragmentSize`|8|each store lane 一次写多少个元素|
-|`ReuseSmemC`|true|是否把"已加载 C 的 smem slot"在 epilogue 末尾继续复用(给 output D 用)|
-|`DelayTmaStore`|false|是否把 TMA store 推迟到最后(为 swizzle / fusion 留时间)|
+|`StagesC`|`min(EpiTiles, 4)` (ReuseSmem 时 `max(min(EpiTiles, 4), StagesD+1)`)|C 加载阶段数(从 C 到 register 的流水线深度)|
+|`StagesD`|`min(EpiTiles, 2)`|D store 阶段数(register 到 smem 再到 gmem 的流水线深度)|
+|`FragmentSize`|`size(EpilogueTileMN{}) / (cooperative ? 256 : 128)`|each store lane 一次写多少个元素|
+|`ReuseSmemC`|true iff `sizeof(C)==sizeof(D) && sizeof(D)>8`|是否把"已加载 C 的 smem slot"在 epilogue 末尾继续复用(给 output D 用)|
+|`DelayTmaStore`|true iff `C==void && !ptr-array schedule`|是否把 TMA store 推迟到最后(为 swizzle / fusion 留时间)|
 
 `EpilogueScheduleAuto` builder 缺省是哪个具体 `StagesC` / `StagesD` / `FragmentSize` / `ReuseSmemC` / `DelayTmaStore` 组合,看 `include/cutlass/epilogue/collective/builders/sm90_builder.inl`(Ch8 讨论)。
 
@@ -82,31 +82,29 @@ EVT 是一个小型"小 DSL":每个 `compute` 节点代表一个算子,叶子节
 #include <cutlass/epilogue/fusion/sm90_visitor_compute_tma_warpspecialized.hpp>
 #include <cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp>
 
-// 例子: D = bias + ReLU(A*B)
-//                       ← Sm90EVT root:add
+// 例子: D = bias + silu(A*B)
+//                       ← Sm90EVT root:plus
 //                    /            \
-//           bias_src_fetch     ReLU compute
+//           bias_src_fetch     silu compute
 //                                 /
 //                          (1 arg = acc)
 
-// silu/relu/gelu 这种 activation CUTLASS **不会**预置 — 见 §5.4 后半段,
-// 这里先给用户自定义 unary functor:
-struct IdentitySilu {
-  template <class T>
+// CUTLASS 在 `cutlass::epilogue::thread::activation.h` 里预置了 GELU / Sigmoid /
+// Tanh / ThresholdReLU / LeakyReLU 等 activation;silu 这种没有,需要自己写 functor。
+// ComputeFn 必须是 `template <class> class`,所以 functor 本身要写成模板:
+template <class T>
+struct HomogeneousSilu {
   CUTLASS_HOST_DEVICE T operator()(T const& x) const {
-    return x / (T(1) + cutlass::exp(-x));
+    return x / (T(1) + cutlass::exp(-x));   // silu 公式
   }
 };
 
 using MyEVT = Sm90EVT<
-    Sm90Compute<homogeneous_add, /* ElementD, RoundStyle... */>,   // root: bias + ReLU(acc)
-    Sm90SrcFetch,                                                    // arg 1 of add: 从 src tensor(bias)取
-    Sm90EVT<                                                         // arg 2 of add: ReLU(acc)
-        Sm90Compute<cutlass::identity, /* RoundStyle... */>,
-        Sm90EVT<
-            Sm90Compute<IdentitySilu, /* RoundStyle... */>,         // 一元 activation
-            Sm90AccFetch                                            // 它的唯一 arg = accumulator
-        >
+    Sm90Compute<cutlass::plus, /* ElementD, RoundStyle... */>,       // root: bias + silu(acc)
+    Sm90SrcFetch<ElementC>,                                           // arg 1 of plus: 从 src tensor(bias)取(ElementC 是 src 类型)
+    Sm90EVT<                                                          // arg 2 of plus: silu(acc)
+        Sm90Compute<HomogeneousSilu, /* RoundStyle... */>,           // 一元 activation(模板 functor)
+        Sm90AccFetch                                                  // 它的唯一 arg = accumulator (Sm90AccFetch 无模板参数)
     >
 >;
 
@@ -119,47 +117,47 @@ EVT 节点的"参数"按 visit 顺序排——根的 arg 列表从前到后,再�
 
 #### callout:`ComputeFn` 设计约束
 
-文件 `include/cutlass/epilogue/fusion/sm90_visitor_compute_tma_warpspecialized.hpp`(`Sm90VisitorCompute` 类附近),讲 `ComputeFn` 的 4 个成员签名约束(原文多行注释):
+`include/cutlass/epilogue/fusion/sm90_visitor_compute_tma_warpspecialized.hpp` 第 65-83 行,讲 `ComputeFn` 的实际约束(原文翻译):
 
 ```cpp
-// 用户要写的 ComputeFn 必须暴露这 4 个 functors(auto-detected by visitor tree):
+// ComputeFn 必须能接受**恰好一个**模板参数。在标准 C++ 里,ComputeFn
+// 也可以有其他模板参数,只要那些参数都有默认值(例如 template<class A,
+// class B = A> struct Foo)。但 Clang 这类编译器有时要求**只能有一个**
+// 模板参数——此时常见 workaround 是写一个单模板参数的子类继承原类,再
+// 用子类作为 Sm90Compute 的 ComputeFn 参数:
 //
-// 1. auto operator()(Tensor frag, BroadcastedScalars...)  → 计算结果(frag-shape 的 tensor)
-// 2. void reductionsum(...)                                  → 用于最终 reduction(如 sum of squares)
-// 3. auto get_reduction_counters()                          → 用于性能计数
-// 4. ... plus consumer::OrderedInnerTileVisibilityReshape  shape info
-//
-// 是的,你写个 sm90_visitor_compute 节点,写的是 4-5 个 functor;
-// 不像 Pytorch 的 activation 是一行 lambda。
+//   template<class A>
+//   struct FooHomogeneous : public Foo<A, A> {};
 ```
 
-这一约束是 CUTLASS 3.x 决定不用 lambda fusion 的原因——**为了在 register / smem 之间有显式的形状控制**,并且 epilogue 端要保证它是 per-warp / per-tile 可拆解的。
+实际 `Sm90Compute::visit()` 内部只调 `ComputeFn<Array<ElementCompute, FragmentSize>>::operator()(cvt_frg_inputs...)`(见同文件第 184 行)——只需要实现这一个 `operator()`。要不要广播参数、可选 `Arguments` 都是 per-functor 扩展点,不是强制 4 个 functor。
+
+这是 CUTLASS 3.x 决定不用 lambda fusion 的原因——**为了在 register / smem 之间有显式的形状控制**,并且 epilogue 端要保证它是 per-warp / per-tile 可拆解的。
 
 #### 完整例子:`D = alpha * (A*B) + beta * C`(标准默认)
 
 `examples/49_hopper_gemm_with_collective_builder/49_collective_builder.cu` 的实现是:
 
 ```cpp
-// D = beta*C + alpha*(A*B),按这个树:
-//     root = add
-//       ├── left  = mul(alpha_scalar, acc)
-//       │           ├── alpha_scalar
-//       │           └── A*B (来自 accumulator)
-//       └── right = mul(beta_scalar, C)
-//                   ├── beta_scalar
-//                   └── C
+// D = beta*C + alpha*(A*B),按这个树(单一 FMA 节点作 root):
+//     root = homogeneous_multiply_add   (算 X*Y + Z)
+//       ├── X = beta_scalar   (Sm90ScalarBroadcast)
+//       ├── Y = C             (Sm90SrcFetch)
+//       └── Z = mul(alpha_scalar, acc)
+//                  ├── alpha_scalar
+//                  └── A*B      (来自 accumulator,Sm90AccFetch)
 
 using CustomEVT =
   cutlass::epilogue::fusion::Sm90EVT<
     cutlass::epilogue::fusion::Sm90Compute<
-      cutlass::homogeneous_multiply_add,
+      cutlass::homogeneous_multiply_add,                              // root: X*Y + Z
       ElementD, ElementCompute, RoundStyle>,
-    cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>,  // beta
-    cutlass::epilogue::fusion::Sm90SrcFetch<ElementC>,              // C
+    cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>,  // X = beta
+    cutlass::epilogue::fusion::Sm90SrcFetch<ElementC>,              // Y = C
     cutlass::epilogue::fusion::Sm90EVT<
       cutlass::epilogue::fusion::Sm90Compute<
         cutlass::multiplies, ElementCompute, ElementCompute, RoundStyle>,
-      cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>, // alpha
+      cutlass::epilogue::fusion::Sm90ScalarBroadcast<ElementScalar>, // alpha_scalar
       cutlass::epilogue::fusion::Sm90AccFetch                        // A*B
     >
   >;
@@ -167,27 +165,28 @@ using CustomEVT =
 
 #### ComputeFn 实际可用的算子
 
-CUTLASS 没有为 silu/relu/gelu/sigmoid 之类的 activation 单独提供 `homogeneous_silu` 这种算子。ComputeFn 模板位置写的是**任何带 `operator()(A)` 的 struct**,只要满足 §5.4 注释块里的"恰好一个模板参数"约束。
+`Sm90Compute<ComputeFn, ...>` 的 `ComputeFn` 必须是**模板 functor**(`template <class> class`),`Sm90Compute` 内部会用 `ComputeFn<Array<ElementCompute, FragmentSize>>` 实例化它(见 `sm90_visitor_compute_tma_warpspecialized.hpp` 的 `Sm90Compute` 定义)。所以任何想塞进 EVT 的算子都得写成模板形式。
 
-CUTLASS 内置的 functors(在 `cutlass` namespace):
+CUTLASS 内置的算子(在 `cutlass` namespace):
 
-- `cutlass::multiplies<A>`、`cutlass::plus<A>`、`cutlass::minus<A>`、`cutlass::divides<A>`、`cutlass::negate<A>`(数学运算)
-- `cutlass::homogeneous_multiply_add<A, A, A>`(单一 FMA 节点,最常用)
+- 数学类:`cutlass::multiplies<A>`、`cutlass::plus<A>`、`cutlass::minus<A>`、`cutlass::divides<A>`、`cutlass::negate<A>`
+- FMA 类:`cutlass::homogeneous_multiply_add<A, A, A>`(单一 FMA 节点,最常用)
+- Activation(`cutlass::epilogue::thread::activation.h`):`GELU<T>`、`Sigmoid<T>`、`Tanh<T>`、`LeakyReLU<T>`、`ThresholdReLU<T>` 等(注意这些都是**模板类**,直接喂给 `Sm90Compute` 即可)
 
-如果用户需要 silu:
+如果用户需要 silu / ReLU(CUTLASS 没预置 ReLU 本身;只有 `ThresholdReLU`):
 
 ```cpp
-// 几十行自定义一个
-template <class A>
+// 模板 functor(必须 `template <class T>` 形式)
+template <class T>
 struct HomogeneousSilu {
-  CUTLASS_HOST_DEVICE A operator()(A x) const {
-    return x / (A(1) + cutlass::exp(-x));   // silu 公式
+  CUTLASS_HOST_DEVICE T operator()(T const& x) const {
+    return x / (T(1) + cutlass::exp(-x));   // silu 公式
   }
 };
-// 用法:Sm90Compute<HomogeneousSilu, ...>
+// 用法:Sm90Compute<HomogeneousSilu, ElementD, ElementCompute, RoundStyle>
 ```
 
-即:activation / 一元 / 二元 / 自定义算子,都需要用户自己写十几行 functor。这是 CUTLASS 3.x 故意不内建大量 activation 的取舍——为了编译期形状可控,只内建最小集(`multiplies` / `plus` 等数学)。其他 activation 通过用户 functor 扩展。
+即:自定义算子都需要用户写十几行模板 functor。CUTLASS 故意不内建所有 activation——为了编译期形状可控,只内建常见数学运算 + 几个常用 activation;其他通过用户 functor 扩展。
 
 ### 5.5 跨章对比
 

@@ -56,9 +56,9 @@ using ColMajor2D = Stride<_1, Int<M>>;   // (i, j) → i + j*M
 
 实际写 mainloop 时,你**不需要自己 typedef RowMajor / ColMajor**——CUTLASS 已经用 `cutlass::layout::RowMajor` / `ColumnMajor` 命名暴露出来,内部展开成 CuTe 的 `Stride<...>`。这层是"高层 API 复用底层 Layout"。
 
-> `LayoutLeft::Apply<Shape>` 的默认 stride 就是 row-major(`Stride<N, 1, 1, ...>`),`LayoutRight` 是 col-major。直接写 row-major / col-major 不需要你填 Stride。
+> `LayoutLeft::Apply<Shape>` 是 **col-major**(`Stride<1, M, ...>`,最左维度 stride=1),`LayoutRight::Apply<Shape>` 是 **row-major**(`Stride<N, 1, ...>`,最右维度 stride=1)— 见 `cute/stride.hpp:277,279` 的 forward decl 注释。直接写 row-major / col-major 不需要你填 Stride。
 
-组合 `Shape<_M, _N> + Stride<_N, _1>` 就是 `(i,j) → i*N + j`——行主序。
+组合 `Shape<_M, _N> + Stride<_1, _M>` 就是 `(i,j) → i + j*M`——列主序(LayoutLeft)。`Shape<_M, _N> + Stride<_N, _1>` 是 `(i,j) → i*N + j`——行主序(LayoutRight)。
 
 #### `Layout`
 
@@ -66,10 +66,10 @@ using ColMajor2D = Stride<_1, Int<M>>;   // (i, j) → i + j*M
 template <class Shape, class Stride = LayoutLeft::Apply<Shape>>
 struct Layout : private cute::tuple<Shape, Stride> { ... };
 
-using A_Layout = Layout<Shape<_4, _8>, Stride<_8, _1>>;
+using A_Layout = Layout<Shape<_4, _8>, Stride<_1, _4>>;   // col-major (LayoutLeft 默认)
 ```
 
-`LayoutLeft::Apply<Shape>` 是默认 stride:行主序。`LayoutRight::Apply<Shape>` 是列主序。直接写 row-major / col-major 不需要你填 Stride。
+`LayoutLeft::Apply<Shape>` 是默认 stride:**col-major**(`Stride<1, M, ...>`)。`LayoutRight::Apply<Shape>` 是 **row-major**(`Stride<N, 1, ...>`)。直接写 row-major / col-major 不需要你填 Stride。
 
 `Layout` 是一个轻量包装——内部就是一个 pair(shape, stride) tuple,所有功能通过 free function 提供。Layout 本身不存数据,只存"如何从 coord 算 index"。
 
@@ -85,9 +85,9 @@ auto A = make_tensor(make_gmem_ptr(A_ptr),
                      make_layout(make_shape(M, N),     // 运行时尺寸
                                  make_stride(N, 1)));   // RowMajor
 
-// 把上面合成(常见):
-auto A = make_tensor(A_ptr,                      // 原始指针(自动包为 gmem_ptr)
-                     Layout<Shape<M, N>, Stride<N, 1>>{});
+// 把上面合成(常见,等价于上面两行的 A):
+auto A_alt = make_tensor(A_ptr,                  // 原始指针(自动包为 gmem_ptr)
+                         Layout<Shape<M, N>, Stride<N, 1>>{});
 ```
 
 Tensor 的语义是"一段连续内存 + 怎么解读它"。同样的指针,不同的 Layout = 不同的视图:

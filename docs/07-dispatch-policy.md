@@ -77,25 +77,27 @@ ExampleRunner<cutlass::gemm::KernelTmaWarpSpecializedPingpong> runner;
 
 ### 7.4 SFINAE 接入点——`detail` 命名空间
 
+`cutlass::gemm::detail`(`include/cutlass/gemm/gemm.h`)里只提供了 **1 个** 真正存在的 helper——`IsCutlass3GemmKernel`,靠 SFINAE 探测 `Kernel::ProblemShape` 别名是否存在来区分 3.x 和 2.x kernel:
+
 ```cpp
-namespace cutlass::gemm::kernel::detail {
+namespace cutlass::gemm::detail {
 
-template <class Kernel>
-struct IsCutlass3GemmKernel
-    : std::bool_constant<is_base_of_v<KernelTmaWarpSpecialized, /*Schedule*/>...> {};
+// 探测 Kernel 是否有 ProblemShape 别名 — 有就当 3.x 处理
+template <class GemmKernel, class = void>
+struct IsCutlass3GemmKernel : cute::false_type { };
 
-template <class Kernel>
-using GetMmaPipeline = typename Kernel::DispatchPolicy::Schedule;  // ← 提取主调度的 alias
+template <class GemmKernel>
+struct IsCutlass3GemmKernel<GemmKernel, cute::void_t<typename GemmKernel::ProblemShape>>
+    : cute::true_type { };
 
-}  // namespace
+}  // namespace detail
 ```
 
 这套 helper 用于:
 
-- `GemmUniversalAdapter` 决定走"3.x path"还是"2.x path"(`IsCutlass3GemmKernel`)
-- 任何想"看 kernel 当前用什么 schedule"的代码用 `GetMmaPipeline`
+- `GemmUniversalAdapter`(在 `gemm_universal_adapter.h:125`)用 `IsCutlass3GemmKernel<...>::value` 决定走 3.x path 还是 2.x path,分别 SFINAE 到不同的 `operator()` 实现
 
-> 把这一对 helper 跟你写的 dispatcher 联动——比如你想写一个"自动选不同 schedule for 不同 problem shape"的下游工具,这里的 `GetMmaPipeline<MyKernel>` 就能拿到。
+> 想"看 kernel 当前用什么 schedule"是合法的 — 直接写 `Kernel::DispatchPolicy::Schedule`(`MainloopSm90*GmmaWarpSpecialized` 已经 `using Schedule = KernelSchedule;`),不需要 helper。但 CUTLASS 没有单独再 typedef 成 `GetMmaPipeline` 这种便利别名。
 
 ### 7.5 这一章的核心 takeaway
 

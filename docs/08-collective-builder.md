@@ -124,7 +124,7 @@ constexpr int compute_stage_count(...) {
 |强制小 tile (256×128 vs 128×128)|`TileShape<_128, _128, _32>` 换成 `_256`, `_128`|
 |强制 cluster 形状|`ClusterShape<_1, _2, _1>` 替换 `<_4, _2, _1>`|
 
-实际项目里,"默认是 Pingpong 还是 Cooperative?"由 Builder 内部的经验启发式决定(`CutlassHeuristics`)。
+实际项目里,"默认是 Pingpong 还是 Cooperative?"由 Builder 内部的经验启发式决定(参考 `media/docs/cpp/heuristics.md`,实际 Python 端在 `python/cutlass_library/heuristics.py`)。
 
 ### 8.6 章末:读完这一章你该做得到的事
 

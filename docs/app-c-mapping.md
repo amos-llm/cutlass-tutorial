@@ -20,7 +20,7 @@
 |`__syncthreads()` 同步 producer/consumer|`PipelineTmaAsync::producer_acquire / producer_commit / consumer_wait / consumer_release`|Ch4.3|
 |cluster 同步 `cluster_arrive + cluster_wait`|`cute::cluster_arrive + cute::cluster_wait`|Ch6.3|
 |`grid = ceil_div(M, BlockM) * ceil_div(N, BlockN);`|`PersistentTileSchedulerSm90Params::num_blocks_in_grid`|Ch6.5|
-|`blockIdx.x` 决定本 CTA 处理哪个 tile|`PersistentTileSchedulerSm90::get_current_work(...)`|Ch6.5|
+|`blockIdx.x` 决定本 CTA 处理哪个 tile|`PersistentTileSchedulerSm90::fetch_next_work(...)`|Ch6.5|
 |swizzle 步进(swizzle_pattern[blockIdx.x])|`max_swizzle_size = ...` 在 `arguments.scheduler` 中|Ch2.4 + Ch6.5|
 |tiled row-major store D|`CollectiveEpilogue::operator()` 内部 TMA store|Ch5.2|
 |加 bias bias[b], epilogue 时 `D = alpha * acc + beta * C + bias[m] + bias[n]`|EVT 树 = `Sm90EVT<Sm90Compute<...>, AccFetch, SrcFetch,...>`|Ch5.4|

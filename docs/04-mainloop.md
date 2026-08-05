@@ -38,7 +38,7 @@ struct CollectiveMma<
 };
 ```
 
-**18 个模板参数**。看似吓人,分两组:
+**15 个模板参数**。看似吓人,分两组:
 
 |组|内容|
 |---|---|
@@ -60,12 +60,11 @@ using ElementB       = ElementB_;
 using StrideB        = StrideB_;
 using TiledMma       = TiledMma_;
 using ArchTag        = typename DispatchPolicy::ArchTag;
-using PipelineStage  = ...;                                    // PipelineState 起点
 using MainloopPipeline = cutlass::PipelineTmaAsync<DispatchPolicy::Stages>;
 //    ↑ 来自 include/cutlass/pipeline/sm90_pipeline.hpp;producer/consumer 屏障数组
 
 using PipelineParams = typename MainloopPipeline::Params;
-using PipelineState  = typename MainloopPipeline::State;
+using PipelineState  = cutlass::PipelineState<DispatchPolicy::Stages>;
 
 using SmemCopyAtomA = SmemCopyAtomA_;
 using SmemCopyAtomB = SmemCopyAtomB_;
@@ -221,14 +220,17 @@ auto neighbor_smem_A = cluster_collective_load(...);
 |---|---|
 |`sm90_mma_tma_gmma_ss.hpp`|非 warp-specialized(MMA 在所有 warp 上,无 producer/consumer 切分)|
 |`sm90_mma_tma_gmma_ss_warpspecialized.hpp`|**默认**:1 producer warp group + 1 consumer warp group|
-|`sm90_mma_tma_gmma_ss_warpspecialized_pingpong.hpp`|1 producer + 2 consumer(交替 pingpong)|
-|`sm90_mma_tma_gmma_ss_warpspecialized_cooperative.hpp`|1 producer + 多 consumer(更大 tile)|
-|`sm90_mma_tma_gmma_ss_warpspecialized_fp8.hpp`|FP8|
-|`sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp`|FP8 + block scale|
 |`sm90_mma_tma_gmma_rs_warpspecialized.hpp`|A 在 register(RS 而非 SS)|
 |`sm90_mma_tma_gmma_rs_warpspecialized_mixed_input.hpp`|A/B 不同 dtype|
-|`sm90_*_array_tma_gmma_*`|Grouped 或 ptr-array(GEMM 的"批处理")|
-|`sm90_sparse_mma_tma_gmma_*`|2:4 structured sparsity|
+|`sm90_mma_tma_gmma_ss_warpspecialized_fp8.hpp`|FP8|
+|`sm90_mma_tma_gmma_ss_warpspecialized_fp8_blockwise_scaling.hpp`|FP8 + block scale|
+|`sm90_mma_array_tma_gmma_ss_warpspecialized.hpp`|Grouped / ptr-array(SS)|
+|`sm90_mma_array_tma_gmma_ss_warpspecialized_fp8.hpp`|FP8 grouped / ptr-array|
+|`sm90_mma_array_tma_gmma_rs_warpspecialized_mixed_input.hpp`|Mixed-input grouped / ptr-array|
+|`sm90_sparse_mma_tma_gmma_ss_warpspecialized.hpp`|2:4 structured sparsity(SS)|
+|`sm90_sparse_mma_tma_gmma_ss_warpspecialized_fp8.hpp`|2:4 structured sparsity + FP8|
+
+> Pingpong / Cooperative 变体在 **kernel 层**(`kernel/sm90_gemm_tma_warpspecialized_pingpong.hpp` / `_cooperative.hpp`),不是 collective 层文件。dispatch policy tag 路由后,它们复用同一个 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` collective mainloop,只换 kernel 编排逻辑。
 
 ### 4.7 图配
 

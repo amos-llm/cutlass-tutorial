@@ -71,15 +71,20 @@ int main() {
 ### 9.2 加 EVT bias + ReLU fusion 的具体写法
 
 ```cpp
+// ReLU 不是 `cutlass::ReLU` 直接可用;CUTLASS 预置的是模板化的
+// `cutlass::epilogue::thread::ThresholdReLU<T>`(template, `threshold=0` 即 ReLU)。
+// ComputeFn 必须是模板 functor,所以 `Sm90Compute<ThresholdReLU<T>, ...>` 里要带模板参数。
 if constexpr (UseCustomEVT) {
   using namespace cutlass::epilogue::fusion;
   using CustomEVT = Sm90EVT<
-      Sm90Compute<homogeneous_add, /*stage=*/0>,    // ← bias addition
+      Sm90Compute<cutlass::plus,
+                  ElementD, ElementCompute, RoundStyle>,    // ← bias addition (root)
       Sm90EVT<
-        Sm90Compute<homogeneous_unary<ReLU>, /*stage=*/1>,  // ← ReLU
-        Sm90AccFetch                              // input is the accumulator
+        Sm90Compute<cutlass::epilogue::thread::ThresholdReLU<ElementCompute>,
+                    ElementD, ElementCompute, RoundStyle>,  // ← ReLU(模板 functor,带 ElementCompute)
+        Sm90AccFetch                                        // input is the accumulator
       >,
-      Sm90SrcFetch                                // bias tensor source
+      Sm90SrcFetch<ElementC>                                // bias tensor source(ElementC 是 src 类型)
   >;
   // 把 EVT 接到 CollectiveEpilogue<...>::Arguments(略):
   epilogue_args = ...;  // 注入 CustomEVT

@@ -54,19 +54,19 @@ CTAs 顺序与 L2 命中:
 
 具体看 `media/docs/cpp/dependent_kernel_launch.md` + `examples/63_hopper_gemm_with_weight_prefetch/` 的 pre-fetch + multi-cast pattern。
 
-### 10.5 `cute::print_tensor` / `print_smem_layout` 调试
+### 10.5 `cute::print` / `cute::print_tensor` / `cute::print_latex` 调试
 
 ```cpp
 // 调试某个 layout 的索引模式:
-cute::print(smem_layout_A);              // 输出 (M, K, Stages) + stride
-cute::print_latex(smem_layout_A);        // 输出 LaTeX (可视化)
+cute::print(smem_layout_A);              // 输出 (M, K, Stages) + stride(在 cute/util/print.hpp)
+cute::print_latex(smem_layout_A);        // 输出 LaTeX(可视化,用在 cute/util/print_latex.hpp)
 
 // 调试某个 tensor:
-cute::print_tensor(A_gmem_tensor);       // 实际打印前 1024 个元素
+cute::print_tensor(A_gmem_tensor);       // 实际打印前 1024 个元素(在 cute/util/print_tensor.hpp)
 cute::print_tensor(A_smem_register_tile); // 同样的 register tile,按 mma view 解读
 ```
 
-> 这些 hook 非常有用——尤其当你的 swizzle 后发现有些 lane 拿到错误数据时,print 一下能清晰看到"lattice"在每 lane 上的分布。
+> 这些 hook 非常有用——尤其当你的 swizzle 后发现有些 lane 拿到错误数据时,print 一下能清晰看到"lattice"在每 lane 上的分布。`print_latex` 对 swizzle layout 特别直观——会画出 XOR 偏移图。
 
 ### 10.6 `cutlass_profiler` 一段最小使用
 
@@ -79,29 +79,33 @@ cmake -DCUTLASS_NVCC_ARCHS=90a ..   # 或 100 等
 make -j cutlass_profiler
 # 跑一个 grid 扫描
 ./tools/profiler/src/cutlass_profiler \
-  --operation=gemm \
-  --tile=128x128_32x32 \
-  --stage=4 \
-  --cluster=2x2x1 \
-  --iterations=10 \
-  --warmup=2 \
-  --problem-shape=4096x4096x4096 \
-  --element=f16,f16,f16 \
+  --operation=Gemm \
+  --cta_m=128 --cta_n=128 --cta_k=32 \
+  --cluster_m=2 --cluster_n=2 --cluster_k=1 \
+  --stages=4 \
+  --raster-order=heuristic \
+  --swizzle-size=4 \
+  --profiling-iterations=10 \
+  --warmup-iterations=2 \
+  --m=4096 --n=4096 --k=4096 \
+  --A=f16:row --B=f16:column \
   --output=csv
 ```
 
-常用 flag(完整列表 `media/docs/cpp/profiler.md`):
+常用 flag(完整列表 `media/docs/cpp/profiler.md`,实际定义在 `tools/profiler/src/operation_profiler.cu:78-95` 和 `gemm_operation_profiler.cu:64-83`):
 
-- `--operation=gemm` / `gemm_array` / `gemm_grouped`
-- `--tile=<MxN>KxK` 切换 tile
-- `--stage=<N>` 强制 stage 数
-- `--cluster=<MxNxK>` cluster 形状
-- `--raster=<Heuristic|AlongM|AlongN>`
-- `--swizzle=<1|2|4|8>` swizzle 深度
-- `--iterations=<N>` 测量 N 次取平均
-- `--warmup=<N>` 前 N 次不计入
+- `--operation=Gemm` / `Conv2d` / `Conv3d` / `SparseGemm` / `BlockwiseGemm` 等
+- `--cta_m=<N> --cta_n=<N> --cta_k=<N>` CTA tile 形状(每个维度单独)
+- `--cluster_m=<N> --cluster_n=<N> --cluster_k=<N>` cluster 形状(每个维度单独)
+- `--stages=<N>` mainloop pipeline 深度
+- `--warps_m=<N> --warps_n=<N> --warps_k=<N>` warp 在 CTA 内的分布
+- `--inst_m=<N> --inst_n=<N> --inst_k=<N>` math instruction 形状
+- `--raster-order=heuristic|along_n|along_m`(也接受 `--raster_order`)
+- `--swizzle-size=<1|2|4|8>`(也接受 `--swizzle_size`)
+- `--profiling-iterations=<N>` 测量 N 次取平均(默认 100)
+- `--warmup-iterations=<N>` 前 N 次不计入(默认 10)
 
-输出末尾会有 GFLOPS / TFlops 数字。**profile 之前要先暖机**——`--warmup=10` 让 GPU 时钟稳定。
+输出末尾会有 GFLOPS / TFlops 数字。**profile 之前要先暖机**——`--warmup-iterations=10`(默认就 10)让 GPU 时钟稳定。
 
 ### 10.7 经验法则
 
@@ -112,7 +116,7 @@ make -j cutlass_profiler
 - **经验式 5**:`StageCountAutoCarveout` 永远是对的起点,先别手动。
 - **经验式 6**:`StreamK` 仅在 K-bound shape 上跑赢 persistent。
 - **经验式 7**:`max_swizzle_size` 在 Hopper 上是 8 时最普适。
-- **经验式 8**:alignment 128-bit 是 TMA baseline,8-byte alignment(64-bit)不够。
+- **经验式 8**:alignment 128-bit (16 字节) 是 TMA baseline;8 字节 (64-bit) 对齐不够,TMA 加载会要求更宽的对齐才能跑出满带宽。
 
 ### 10.8 图配
 
@@ -122,7 +126,7 @@ make -j cutlass_profiler
 
 ### 10.9 章末:读完这一章你该做得到的事
 
-- ✅ 用 `cutlass_profiler --operation=gemm --tile=128x128_32x32 --stage=4 ...` 跑一次 baseline。
+- ✅ 用 `cutlass_profiler --operation=Gemm --cta_m=128 --cta_n=128 --cta_k=32 --stages=4 ...` 跑一次 baseline。
 - ✅ 在不同的 (M, N, K) shape 上用表格 10.2 推荐一组 tile+cluster,各自 profiler 一遍。
 - ✅ 在 Ch9 的 `ExampleRunner<>` 里调 4 个 `*Type` 参数,配合 `cutlass_profiler` 评测。
 - ✅ 懂得 `cutlass_profiler` 输出的几个数字怎么解读(GFLOPS、有效率、瓶颈分析)。

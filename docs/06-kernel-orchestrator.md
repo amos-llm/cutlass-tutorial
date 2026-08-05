@@ -2,7 +2,7 @@
 
 这一章读 `include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp` + `sm90_tile_scheduler.hpp` + `static_tile_scheduler.hpp` + `tile_scheduler_params.h`。
 
-把 Kernel orchestrator 和 TileScheduler 合并讲的原因:**它们在一个 kernel 的入口一起出现**——`operator()` 调 first `tile_scheduler.get_current_work()`,得到 (m, n) 切片,然后跑 mainloop + epilogue。
+把 Kernel orchestrator 和 TileScheduler 合并讲的原因:**它们在一个 kernel 的入口一起出现**——`operator()` 调 first `tile_scheduler.fetch_next_work(...)`,得到 (m, n) 切片,然后跑 mainloop + epilogue。
 
 ### 6.1 Kernel 类(`GemmUniversal<...>`)的 SFINAE 路由
 
@@ -97,16 +97,18 @@ CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
 
   // 主循环:每个 CTA 处理多个 tile(persistent)
   while (true) {
-    // 1) 决定本 CTA 这一轮跑哪个 tile
-    auto work_tile_info = TileScheduler::get_current_work(params.scheduler);
-    auto [m_coord, n_coord, k_tile_count, ...] = work_tile_info;
+    // 1) 决定本 CTA 这一轮跑哪个 tile — fetch_next_work 返回 pair
+    auto [work_tile_info, increment_pipe] =
+        TileScheduler::fetch_next_work(params.scheduler);
+    auto [m_coord, n_coord, l_coord] = work_tile_info;     // WorkTileInfo 只有 M/N/L idx
 
     if (!work_tile_info.is_valid()) {
       break;   // 全部分配完了
     }
 
-    // 2) 计算在本 tile 内 K 维 split(用于 K-loop 边界)
-    int k_tile_idx = ...;
+    // 2) 计算在本 tile 内 K 维 split(用于 K-loop 边界) — K 不在 WorkTileInfo 里
+    int k_tile_count = ...;   // 例如:size<3>(gA_mkl) from mainloop load
+    int k_tile_idx   = ...;
 
     // 3) Producer 主循环
     if (warp_group_role == Producer) {
@@ -125,8 +127,7 @@ CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
     // 5) 收尾:epilogue
     CollectiveEpilogue::operator()(..., work_tile_info);
 
-    // 6) 推进 scheduler + cluster barrier(等待同 cluster 的兄弟 CTA 都完成)
-    TileScheduler::advance(params.scheduler);
+    // 6) cluster barrier(等待同 cluster 的兄弟 CTA 都跑完本 tile 才进入下一 tile)
     cluster_arrive();
     cluster_wait();
   }
@@ -213,14 +214,29 @@ CRTP 继承了一个 `StaticPersistentTileScheduler<Tag>` 公共模板,Tag 用�
 
 #### 关键参数
 
+`Arguments`(用户填,`tile_scheduler_params.h`)只暴露两个字段:
+
+```cpp
+struct Arguments {
+  int max_swizzle_size = 0;                            // 1 / 2 / 4 / 8
+  RasterOrderOptions raster_order = RasterOrderOptions::Heuristic;  // Heuristic / AlongM / AlongN
+};
+```
+
+实际 `Params`(scheduler 内部算完后固化,`PersistentTileSchedulerSm90Params` 在 `tile_scheduler_params.h:87`)大致是:
+
 ```cpp
 struct PersistentTileSchedulerSm90Params {
-  RasterOrderOptions raster_order;            // AlongN / AlongM / Heuristic
-  uint32_t            max_swizzle_size;        // 1 / 2 / 4 / 8
-  int                 swizzle_log;             // log2(上面)
-  uint64_t            num_blocks_in_grid;      // grid 总数
-  dim3                grid;                    // 实际 grid dim
-  KernelHardwareInfo  hw_info;                 // SM count / max blocks per SM
+  FastDivmodU64Pow2 divmod_cluster_shape_major_{};    // cluster major 维快速除/模
+  FastDivmodU64Pow2 divmod_cluster_shape_minor_{};
+  FastDivmodU64    divmod_batch_{};
+  FastDivmodU64    divmod_cluster_blk_major_{};
+
+  uint64_t blocks_per_problem_ = 0;                   // 总 CTA 数
+  int32_t  log_swizzle_size_   = 0;                   // log2(max_swizzle_size)
+  RasterOrder raster_order_    = RasterOrder::AlongN; // 解析后的 raster
+  uint32_t problem_tiles_m_, problem_tiles_n_, problem_tiles_l_;
+  uint32_t cluster_shape_m_,   cluster_shape_n_;
 };
 ```
 
@@ -235,16 +251,17 @@ struct PersistentTileSchedulerSm90Params {
 #### 工作算法
 
 ```cpp
-auto get_current_work() -> WorkTileInfo {
+// fetch_next_work(WorkTileInfo prev) 返回 pair<next, increment_pipe>
+auto fetch_next_work(WorkTileInfo work_tile_info) -> tuple<WorkTileInfo, bool> {
   // 当前是第几次 work-index
   uint64_t work_idx = work_id_counter_++;
   if (work_idx >= total_num_tiles_) {
-    return WorkTileInfo::invalid();
+    return {WorkTileInfo::invalid_work_tile(), false};
   }
   // 把 work_idx → (m_tile, n_tile),按 swizzle + raster 算
   auto [m_tile, n_tile] = get_work_idx_m_and_n(
       blk_per_grid_dim_, work_idx, swizzle_log_, raster_order_);
-  return WorkTileInfo{m_tile, n_tile, ...};
+  return {WorkTileInfo{m_tile, n_tile, ...}, increment_pipe};
 }
 ```
 
@@ -269,13 +286,13 @@ auto get_current_work() -> WorkTileInfo {
 |`StreamKScheduler`|`sm90_tile_scheduler_stream_k.hpp`|K 维的 split 与 partial result 合并|K-parallelism,partial sum|
 |`GroupScheduler`|`sm90_tile_scheduler_group.hpp`|grouped GEMM(多组不同形状的 GEMM 同 kernel 跑)|用 problem_visitor 拉多个 problem|
 
-每种都暴露同名 `get_current_work` / `advance` 接口,所以 Ch6.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
+每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 Ch6.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
 
 #### `StreamKScheduler` 的梗概(供"如果你好奇"用)
 
-Stream-K 把 work 沿 K 维再切,每个 worker 处理某个 (m, n, k_partial) cube,所有 partial result 写到一个 partial buffer,最后一段 reduction kernel 把 partial result 累加成最终 D。这样可以"完全用满 GPU"——任何 K-bound 形状都能打平。
+Stream-K 把 work 沿 K 维再切,每个 worker 处理某个 (m, n, k_partial) cube,所有 partial result 写到 partial buffer(smem 或 gmem),**reduction 由同一个 kernel 在 tile 边界处 atomic-add 完成**(CUTLASS 3.x 的 `PersistentTileSchedulerSm90StreamK` 在 `sm90_tile_scheduler_stream_k.hpp`)。这样可以"完全用满 GPU"——任何 K-bound 形状都能打平。
 
-需要 partial buffer + final reduction,所以 StreamKScheduler 通常配 `StreamKReductionKernel`,由 `examples/47_ampere_gemm_universal_streamk/` 演示。
+注意 `examples/47_ampere_gemm_universal_streamk/` 是 CUTLASS **2.x** 的 Stream-K 演示(走 `UniversalGemm` + 单独的 reduction kernel),跟 3.x 的 `StreamKScheduler` tag 是两套实现,不要混。
 
 #### `GroupScheduler` 梗概
 
@@ -283,7 +300,7 @@ Grouped GEMM(每组 problem 的 M/N/K 不同,如 MoE),调度器由 `GroupProblem
 
 ### 6.8 章末:读完这一章你该做得到的事
 
-- ✅ 在 kernel 入口看到 `WarpGroupRole { Producer, Consumer }`、`ProducerWarpRole`、`persistent_scheduler.get_current_work(...)` 这些,认得出各自在做什么。
+- ✅ 在 kernel 入口看到 `WarpGroupRole { Producer, Consumer }`、`ProducerWarpRole`、`persistent_scheduler.fetch_next_work(...)` 这些,认得出各自在做什么。
 - ✅ 能口述"6 个 helper 在 producer / consumer 主循环里按什么顺序被调用"。
 - ✅ 把 task graph 在脑子里跑一遍:TMA load → barrier release → WGMMA → barrier release → TMA store。
 - ✅ 知道 StreamK / Grouped 调度的存在和位置,以后看代码不陌生。

@@ -40,6 +40,6 @@ PDL 是 sm_90+ 的硬件特性:**让 host 在 kernel A 还没结束时启动 ker
 
 ### D.7 Sparse + Block-scaled Quantization
 
-`examples/95_blackwell_gemm_blockwise/*` 演示 sm_100 上的 block-scale + sparse。`examples/67_hopper_fp8_warp_specialized_gemm_with_blockwise_scaling/` 同主题 Hopper 版本。
+`examples/81_blackwell_gemm_blockwise/*` 演示 sm_100 上的 block-scale GEMM。`examples/67_hopper_fp8_warp_specialized_gemm_with_blockwise_scaling/` 同主题 Hopper 版本。
 
 ---

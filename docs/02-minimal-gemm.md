@@ -72,7 +72,7 @@ using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 #### Element / Layout / Alignment(4 个一组,描述一份输入)
 
 ```cpp
-using ElementA   = float;                  // 类型:FP32(经 TMA 加载到 smem 后变 TF32)
+using ElementA   = float;                  // 类型:FP32(smem 里仍是 FP32;TF32 精度截断在 WGMMA 执行时发生)
 using LayoutA    = cutlass::layout::RowMajor;  // 行主序
 constexpr int AlignmentA = 4;              // 4 个 fp32 = 128-bit,TMA 要求
 ```
