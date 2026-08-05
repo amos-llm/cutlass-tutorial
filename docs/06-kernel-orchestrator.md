@@ -269,11 +269,11 @@ auto fetch_next_work(WorkTileInfo work_tile_info) -> tuple<WorkTileInfo, bool> {
 
 ### 6.6 图配
 
+上面 §6.5 提到的两种调度模式:
+
 ![persistent_static](../media/images/persistent_static.png)
 
 ![non_persistent](../media/images/non_persistent.png)
-
-![threadblock mma pipelined](../media/images/cutlass-threadblock-mma-pipelined.png)
 
 ### 6.7 调度器族侧栏
 
