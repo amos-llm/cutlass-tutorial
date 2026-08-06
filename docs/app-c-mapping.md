@@ -10,24 +10,24 @@
 |`dim3 cluster_dim(...)`|`using ClusterShape = Shape<_cluster_M, _cluster_N, _cluster_K>;`|Ch2.2|
 |`cudaLaunchKernel(...)`|`Gemm gemm; gemm.can_implement(...); gemm.initialize(...); gemm.run();`|Ch2.5|
 |`if (!can_handle_residue(m, n, k)) return;`|`gemm.can_implement(arguments)`|Ch2.5|
-|`__shared__ float smem_A[TileM][TileK];` + swizzle|`SmemLayoutAtomA = composition(Swizzle<B,M,S>, Layout<Shape<_TileM, _TileK>, Stride<_TileK, _1>>{})`|Ch8|
-|`prepare_gmem_desc(...)` 写 TMA desc|`collective::CollectiveBuilder` 内部 + `prefetch_tma_descriptors(...)`|Ch2.5 + Ch4.4|
+|`__shared__ float smem_A[TileM][TileK];` + swizzle|`SmemLayoutAtomA = composition(Swizzle<B,M,S>, Layout<Shape<_TileM, _TileK>, Stride<_TileK, _1>>{})`|Ch11|
+|`prepare_gmem_desc(...)` 写 TMA desc|`collective::CollectiveBuilder` 内部 + `prefetch_tma_descriptors(...)`|Ch2.5 + Ch5.4|
 |`cuTensorMapEncodeTiled(...)`|`cute::TmaDescriptor` 包装|附录 A|
-|TMA load `cp.async.bulk.tensor.*`|`cute::copy(SM90_TMA_LOAD, ...)`|Ch4.3|
+|TMA load `cp.async.bulk.tensor.*`|`cute::copy(SM90_TMA_LOAD, ...)`|Ch5.3|
 |`wgmma.mma_async.sync.aligned.m64n...k16...`(单条)|`cute::gemm(TiledMma, A_frag, B_frag, acc)` (内部 dispatch 到该指令)|Ch3.5|
-|`is_producer = warpIdx < 4` 分支|`WarpGroupRole { Producer, Consumer }` + `kernel/.../operator()`|Ch6.3|
-|producer/consumer 屏障数组(`bar[N]`)|`cutlass::PipelineTmaAsync<N>`|Ch4.2 + Ch6.4|
-|`__syncthreads()` 同步 producer/consumer|`PipelineTmaAsync::producer_acquire / producer_commit / consumer_wait / consumer_release`|Ch4.3|
-|cluster 同步 `cluster_arrive + cluster_wait`|`cute::cluster_arrive + cute::cluster_wait`|Ch6.3|
-|`grid = ceil_div(M, BlockM) * ceil_div(N, BlockN);`|`PersistentTileSchedulerSm90Params::num_blocks_in_grid`|Ch6.5|
-|`blockIdx.x` 决定本 CTA 处理哪个 tile|`PersistentTileSchedulerSm90::fetch_next_work(...)`|Ch6.5|
-|swizzle 步进(swizzle_pattern[blockIdx.x])|`max_swizzle_size = ...` 在 `arguments.scheduler` 中|Ch2.4 + Ch6.5|
-|tiled row-major store D|`CollectiveEpilogue::operator()` 内部 TMA store|Ch5.2|
-|加 bias bias[b], epilogue 时 `D = alpha * acc + beta * C + bias[m] + bias[n]`|EVT 树 = `Sm90EVT<Sm90Compute<...>, AccFetch, SrcFetch,...>`|Ch5.4|
-|加 ReLU|`homogeneous_unary<ReLU>` 在 EVT 节点中|Ch5.4|
-|加 silu|自定义 unary functor(例如 §5.4 中的 `IdentitySilu`)在 `Sm90Compute<...>` 节点中|Ch5.4|
+|`is_producer = warpIdx < 4` 分支|`WarpGroupRole { Producer, Consumer }` + `kernel/.../operator()`|Ch8.3|
+|producer/consumer 屏障数组(`bar[N]`)|`cutlass::PipelineTmaAsync<N>`|Ch5.2 + Ch8.4|
+|`__syncthreads()` 同步 producer/consumer|`PipelineTmaAsync::producer_acquire / producer_commit / consumer_wait / consumer_release`|Ch5.3|
+|cluster 同步 `cluster_arrive + cluster_wait`|`cute::cluster_arrive + cute::cluster_wait`|Ch8.3|
+|`grid = ceil_div(M, BlockM) * ceil_div(N, BlockN);`|`PersistentTileSchedulerSm90Params::num_blocks_in_grid`|Ch8.5|
+|`blockIdx.x` 决定本 CTA 处理哪个 tile|`PersistentTileSchedulerSm90::fetch_next_work(...)`|Ch8.5|
+|swizzle 步进(swizzle_pattern[blockIdx.x])|`max_swizzle_size = ...` 在 `arguments.scheduler` 中|Ch2.4 + Ch8.5|
+|tiled row-major store D|`CollectiveEpilogue::operator()` 内部 TMA store|Ch6.2|
+|加 bias bias[b], epilogue 时 `D = alpha * acc + beta * C + bias[m] + bias[n]`|EVT 树 = `Sm90EVT<Sm90Compute<...>, AccFetch, SrcFetch,...>`|Ch6.4|
+|加 ReLU|`homogeneous_unary<ReLU>` 在 EVT 节点中|Ch6.4|
+|加 silu|自定义 unary functor(例如 §5.4 中的 `IdentitySilu`)在 `Sm90Compute<...>` 节点中|Ch6.4|
 |输出 swizzle(`D_swizzled[i,j] = D[i^swizz_b, j^swizz_m]`)|`examples/50_hopper_gemm_with_epilogue_swizzle/`||
-|Stream-K(把 K 维继续切,partial sum)|`TileSchedulerType = StreamKScheduler`|Ch6.7|
+|Stream-K(把 K 维继续切,partial sum)|`TileSchedulerType = StreamKScheduler`|Ch8.7|
 |Grouped GEMM(多 problem 一次 launch)|`examples/57_hopper_grouped_gemm/`|附录 D|
 |2:4 structured sparse GEMM|`examples/62_hopper_sparse_gemm/`|附录 D|
 |im2col / col2im Conv|`examples/cute/tutorial/sgemm_*` + `media/docs/cpp/implicit_gemm_convolution.md`|附录 D|

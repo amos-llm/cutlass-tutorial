@@ -1,4 +1,4 @@
-## 第 6 章:Kernel orchestrator + TileScheduler(调度器族对比)
+## 第 11 章:Kernel orchestrator + TileScheduler(调度器族对比)
 
 这一章读 `include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp` + `sm90_tile_scheduler.hpp` + `static_tile_scheduler.hpp` + `tile_scheduler_params.h` + `sm90_tile_scheduler_stream_k.hpp` + `sm90_tile_scheduler_group.hpp` + `sm100_tile_scheduler.hpp` + `sm100_tile_scheduler_stream_k.hpp` + `sm100_tile_scheduler_group.hpp` + `sm100_static_tile_scheduler.hpp`。
 
@@ -199,7 +199,7 @@ if (role == Consumer) {
 }
 ```
 
-注意 6 个 helper 的**调用顺序**(再次强调,这对应 Ch4):
+注意 6 个 helper 的**调用顺序**(再次强调,这对应 Ch5):
 
 1. `load_init`(在 producer / consumer 进入 while 循环前各做一次)
 2. Producer 循环:`producer_acquire → load → producer_commit → ++state` × N
@@ -619,7 +619,7 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 | `StreamKScheduler` (sm90 / 100) | `sm90_tile_scheduler_stream_k.hpp` / `sm100_tile_scheduler_stream_k.hpp` | K-bound 形状(M/N 小,K 大);`Heuristic` 自动挑 mode | K-parallel:每个 worker 算一段 K 子区间;partial → gmem workspace → atomic-reduce | gmem workspace + `BlockStripedReduce` + `NamedBarrier` |
 | `GroupScheduler` (sm90 / 100) | `sm90_tile_scheduler_group.hpp` / `sm100_tile_scheduler_group.hpp` | Grouped GEMM:多组 M/N/K 不同(如 MoE、variable-length) | Warp-scan 32 lane 一次定位 group;`L_idx` 复用存 group id | 不需要(每个 group 的 K 是独立的) |
 
-每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 Ch6.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
+每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 Ch8.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
 
 ### 6.12 选哪个调度器——决策树
 
@@ -640,7 +640,7 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
     └── 走 builder 决定的默认 tag,通常 Persistent
 ```
 
-配置开关一览(完整列表见 Ch10):
+配置开关一览(完整列表见 Ch13):
 
 | 开关 | 在哪 | 取值 |
 |---|---|---|
@@ -652,7 +652,7 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 
 ### 6.13 图配
 
-持久 / 非持久调度的对照图(配 Ch6.5 / Ch6.8):
+持久 / 非持久调度的对照图(配 Ch8.5 / Ch8.8):
 
 ![persistent_static](../media/images/persistent_static.png)
 
@@ -667,6 +667,6 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 - ✅ 看到 `WorkTileInfo.is_final_split() == false` 知道 stream-K partial 要做 atomic reduction。
 - ✅ 能根据 shape 选 scheduler:大数据并行 → `Persistent`;K-bound → `StreamK`;MoE / variable-length → `Group`;Sm100 + 并发多 kernel → `DynamicPersistent`。
 
-Ch7 看 dispatch policy——为什么这一切被自动选到。
+Ch9 看 dispatch policy——为什么这一切被自动选到。
 
 ---

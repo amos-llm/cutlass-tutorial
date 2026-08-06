@@ -29,7 +29,7 @@ CUTLASS 3.x 把这件事**正好**切成 5 个 C++ 类,每类一一对应一件�
 CUTLASS 3.x 设计文档 `media/docs/cpp/cutlass_3x_design.md` 里列了 5 条:
 
 1. **可组合性**:5 层之间用模板参数互不依赖,可以单独替换某一层而不动其他层。比如你想改 epilogue 加 swizzle,只换第 4 个模板参数,不动 mainloop。
-2. **可配置性**:每个具体实现都用"dispatch policy" tag(空 struct)标记,builder(第 8 章)用 tag 路由到对应 partial specialization——用户写 `Auto` 而不是写具体类名。
+2. **可配置性**:每个具体实现都用"dispatch policy" tag(空 struct)标记,builder(第 11 章)用 tag 路由到对应 partial specialization——用户写 `Auto` 而不是写具体类名。
 3. **关注点分离**:mma 编程模型(`CollectiveMma`)和 epilogue 融合(`CollectiveEpilogue`)是两个完全不同的领域专家的工作,CUTLASS 把它们解耦,各自演化。
 4. **硬件可移植**:同一套 5 层框架可以在 Hopper、Blackwell、Volta、Ampere、Turing 上工作;具体某一层(比如 mma atom)从 `WGMMA` 换到 `UMMA` 不影响其他 4 层。
 5. **默认正确**:`Auto*`(`StageCountAuto`、`KernelScheduleAuto`、`EpilogueScheduleAuto`)总是选一个合理的实现,你得手写错才能跑错——这是 3.x 比 2.x 显著进步的一处。
@@ -60,6 +60,80 @@ CUTLASS 3.x 的解法是**重新切分层次**,不再按「硬件哪一层」切
 - **单文件**——便于全文搜、git 单 file diff、转 PDF。章末锚点 `<a name>` 可直接跳转。
 - **类名不省略**——每个 `using`、`constexpr`、`typename`、`operator()` 前缀都不缩。
 - **你不熟悉的 CUTLASS 概念 ↔ 你已经会的 Hopper 概念**——每个新类、每个调度 tag、每个 `SharedStorage` 段都有手写对照 callout。
+
+### 章节地图与阅读顺序
+
+教程共 13 章 + 4 附录。按"对 CUTLASS 3.x 抽象的覆盖深度"分三档:
+
+```text
+必修 (Core Path)        ── 9 章构成主干,读完即能读懂 examples/48 + 99% 的 mainloop
+  Ch1  5 层架构图(整体鸟瞰)
+  Ch2  跑通一个最小 GEMM(走读 examples/48)
+  Ch3  CuTe 实战(写法 / layout / swizzle / make_tiled_*)
+  Ch4  smem pipeline 与 barrier 抽象(PipelineTmaAsync 6 个 helper)
+  Ch5  深入 CollectiveMainloop
+  Ch6  深入 CollectiveEpilogue
+  Ch7  Epilogue Visitor Tree(EVT)
+  Ch8  Kernel orchestrator + TileScheduler(调度器族对比)
+  Ch9  DispatchPolicy(tag-inheritance 模式)
+
+进阶 (Advanced)         ── 学完必修之后按需读
+  Ch10 Blackwell 桥接(sm100 / sm103 架构差异 + tcgen05)
+  Ch11 CollectiveBuilder(8 个 partial spec 路由)
+  Ch13 调参世界观 + cutlass_profiler
+
+选修 (Case Study)       ── 不在主线,但读完会拼起完整工程图
+  Ch12 `examples/49`——一个 End-to-End 集成示例
+```
+
+#### 章节依赖图
+
+```text
+                            Ch1 (架构)
+                              │
+                              ▼
+                            Ch2 (最小 GEMM)
+                              │
+            ┌─────────────────┼─────────────────┐
+            ▼                 ▼                 ▼
+       Ch3 (CuTe)       Ch3 (CuTe)        Ch3 (CuTe)
+            │                 │                 │
+            ▼                 ▼                 ▼
+            └──────► Ch4 (smem pipeline) ◄─────┘
+                          │
+              ┌───────────┼───────────┐
+              ▼           ▼           ▼
+        Ch5 (mainloop) Ch6 (epilogue)
+              │           │
+              │           ▼
+              │      Ch7 (EVT)
+              │           │
+              └─────┬─────┘
+                    ▼
+              Ch8 (kernel orchestrator + TileScheduler)
+                    │
+                    ▼
+              Ch9 (DispatchPolicy)
+                    │
+            ┌───────┼───────┐
+            ▼               ▼
+       Ch10 (Blackwell) Ch11 (CollectiveBuilder)
+                            │
+                            ▼
+                       Ch12 (End-to-End)
+                            │
+                            ▼
+                       Ch13 (Tuning)
+```
+
+读法建议:
+
+- **第一次读**:从 Ch1 顺序读到 Ch9(必修主干)。
+- **第二次读**:补 Ch10(Blackwell,如果你用 sm100)和 Ch11(Builder,理解 dispatch 怎么自动选)。
+- **第三次读**:Ch13(Tuning,实战用)+ Ch12(End-to-End,看工程怎么组织)。
+- **附录 A-D**:随时查阅——`primitives ↔ CUTLASS 封装文件` 表、`media/docs/cpp/` 导航、`code map`、`future` 路线图。
+
+每章末尾有 checklist——读完能自检"这一章到底讲清没讲清"。如果某条 checklist 卡住,回到对应章节的图 + 代码段重读。
 
 ---
 

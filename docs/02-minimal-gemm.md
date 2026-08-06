@@ -8,12 +8,12 @@
 
 `48_*.cu` 顶部 `\brief` 块把「为什么这个 example 用得着 Hopper」总结成 4 件事。这一章按这 4 件事展开,对应关系是:
 
-1. **WGMMA(第三代 tensor core)**——Hopper 引入的 warpgroup 级矩阵乘累加,比 Ampere 时代的 mma.sync 更宽。这是 mainloop 计算阶段(Ch4)用的指令。
-2. **TMA(Tensor Memory Accelerator)**——硬件单元,做大块 gmem ↔ smem 传输,以及 cluster 内 CTA 间 smem 互访。还支持 FP32→TF32 的隐式精度截断,免得你手写转换。这是 mainloop 加载阶段(Ch4)和 epilogue 写回(Ch5)用的机制。
-3. **Warp Specialized kernel**——producer warp(TMA 加载)+ consumer warp(WGMMA 计算)分开;两拨线程并行、靠 mbarrier 同步。比「所有人既加载又计算」少一半同步开销。是 Ch4 / Ch6 主循环编排的核心 pattern。
-4. **CTA rasterization + swizzle**——CTA 排布方向(沿 M 还是沿 N)+ swizzle 大小(1/2/4/8),影响跨 CTA 的 L2 locality,调对了能涨几个点。是 Ch6 的 `TileScheduler` 参数(`raster_order` + `max_swizzle_size`)。
+1. **WGMMA(第三代 tensor core)**——Hopper 引入的 warpgroup 级矩阵乘累加,比 Ampere 时代的 mma.sync 更宽。这是 mainloop 计算阶段(Ch5)用的指令。
+2. **TMA(Tensor Memory Accelerator)**——硬件单元,做大块 gmem ↔ smem 传输,以及 cluster 内 CTA 间 smem 互访。还支持 FP32→TF32 的隐式精度截断,免得你手写转换。这是 mainloop 加载阶段(Ch5)和 epilogue 写回(Ch6)用的机制。
+3. **Warp Specialized kernel**——producer warp(TMA 加载)+ consumer warp(WGMMA 计算)分开;两拨线程并行、靠 mbarrier 同步。比「所有人既加载又计算」少一半同步开销。是 Ch5 / Ch8 主循环编排的核心 pattern。
+4. **CTA rasterization + swizzle**——CTA 排布方向(沿 M 还是沿 N)+ swizzle 大小(1/2/4/8),影响跨 CTA 的 L2 locality,调对了能涨几个点。是 Ch8 的 `TileScheduler` 参数(`raster_order` + `max_swizzle_size`)。
 
-这 4 件事就是 3.x GEMM 在 Hopper 上的全部「特殊」——没有第 5 条。`examples/49`(Ch9)也是同一组 mechanism,只是数据类型/调度换了一换。
+这 4 件事就是 3.x GEMM 在 Hopper 上的全部「特殊」——没有第 5 条。`examples/49`(Ch12)也是同一组 mechanism,只是数据类型/调度换了一换。
 
 ### 2.1 上手:用 CUTLASS 跑一个 TF32 Hopper GEMM 需要哪几步
 
@@ -112,7 +112,7 @@ using ClusterShape = Shape<_4, _2, _1>;       // 4×2×1 = 8 个 CTA 协作
 - **BlockK**:K 维 pipeline 的单 stage 大小,常 32 / 64。
 - **ClusterShape**:配合 `cutlass/cluster_launch.hpp` 一起 launch,这 8 个 CTA 可以用 DSMEM(分布式 shared memory)互相看对方的 smem。
 
-> **你手写 GEMM 的对照**:就是 `dim3 block_dim(...); dim3 grid_dim(...);`,加上 sm_90a 的 `cluster_dim = cdim(...)` 调用。Tile 越大,smem 越大、潜在 stage 数越少;Cluster 越大,CTA 间通信越频繁——调优第 10 章。
+> **你手写 GEMM 的对照**:就是 `dim3 block_dim(...); dim3 grid_dim(...);`,加上 sm_90a 的 `cluster_dim = cdim(...)` 调用。Tile 越大,smem 越大、潜在 stage 数越少;Cluster 越大,CTA 间通信越频繁——调优第 13 章。
 
 #### `*Auto*` 系列 tag(3 个)
 
@@ -122,7 +122,7 @@ using KernelSchedule = cutlass::gemm::collective::KernelScheduleAuto;          /
 // (epilogue 也有) cutlass::epilogue::collective::EpilogueScheduleAuto;
 ```
 
-这一行一次性出现了 3 个"auto"型的 tag,这是新手最容易懵的地方。它们不是"留给编译期决定"——它们**精确选了一个 dispatcher**,只是你不用手填。"auto"这一字背后是 builder 的 partial specialization 路由,Ch7 + Ch8 会讲清。
+这一行一次性出现了 3 个"auto"型的 tag,这是新手最容易懵的地方。它们不是"留给编译期决定"——它们**精确选了一个 dispatcher**,只是你不用手填。"auto"这一字背后是 builder 的 partial specialization 路由,Ch9 + Ch11 会讲清。
 
 具体含义:
 
@@ -159,7 +159,7 @@ using CollectiveMainloop = typename cutlass::gemm::collective::CollectiveBuilder
 >::CollectiveOp;
 ```
 
-> 这些参数**全部**会被 builder 用来在 `include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`(10+ partial specialization)**挑**出一个具体的 `CollectiveMma` 实现(详见 Ch8)。Builder 不是黑箱——它是 CUTLASS 3.x 帮你做"模板参数填空"的部分。
+> 这些参数**全部**会被 builder 用来在 `include/cutlass/gemm/collective/builders/sm90_gmma_builder.inl`(10+ partial specialization)**挑**出一个具体的 `CollectiveMma` 实现(详见 Ch11)。Builder 不是黑箱——它是 CUTLASS 3.x 帮你做"模板参数填空"的部分。
 
 epilogue builder 同构但少一些参数(`EpilogueTile` 类型 + 三个 c-d 类型)。
 
@@ -250,7 +250,7 @@ int run(Options& options) {
 
 **为什么大多数 example 都是静态?** 因为静态 = 「编译期 layout 一致性 + smem alignment + mma 形状」全部 hard-check;动态 shape 拿到的是运行时的 `int64_t`,CuTe 只能做部分 sanity check,内层循环得 runtime dispatch,**编译器能优化的空间大幅缩窄**。代价就是「换 shape 重编译」。
 
-只有当你**真的**需要一份 kernel 接任意 shape(grouped GEMM / production inference / 一份 .so 服务所有 shape),才走动态。`examples/49`(Ch9)走的就是动态 shape。
+只有当你**真的**需要一份 kernel 接任意 shape(grouped GEMM / production inference / 一份 .so 服务所有 shape),才走动态。`examples/49`(Ch12)走的就是动态 shape。
 
 > 一句话:**静态 = 「编译期把 layout 烧死」,换来编译期校验和极致优化;动态 = 「运行时再算 layout」,换来一份 .so 通吃所有 shape。** 95% 的例子是静态,因为编译期校验是 CUTLASS 3.x 的最大卖点之一(Ch0.2「默认正确」那节)。
 
@@ -272,7 +272,7 @@ struct SharedStorage {
 };
 ```
 
-**union(不是 struct!)的语义**:mainloop 用完了之后,同一 smem 区被 epilogue 复用——因为 mainloop 结束后,我们不再需要它。这是"5 层共享 smem"的现实约束。**注意这是 kernel 整个生命周期里非并发(非 persistent)**。persistent kernel 的 SharedStorage 见 Ch6。
+**union(不是 struct!)的语义**:mainloop 用完了之后,同一 smem 区被 epilogue 复用——因为 mainloop 结束后,我们不再需要它。这是"5 层共享 smem"的现实约束。**注意这是 kernel 整个生命周期里非并发(非 persistent)**。persistent kernel 的 SharedStorage 见 Ch8。
 
 引用(`media/docs/cpp/programming_guidelines.md`)——讲 CUTLASS 的所有 kernel 的"Params / SharedStorage"惯例。这一段不重写。
 

@@ -2,7 +2,7 @@
 
 你可能认为 CuTe 是装饰用的工具库。其实不是——它是 CUTLASS **写 mainloop / epilogue 的语言**。mainloop 文件里那一串 `Shape` / `make_tensor` / `make_tiled_mma` 不是装饰,是 mainloop 在描述"我这一 stage 的 smem 上 A 是什么样的、warp 怎么拿自己的 fragment"。
 
-读 Ch4 之前,你需要 CuTe 的"语法熟悉"。这一章不讲 CuTe 怎么写 sgemm(那是 `media/docs/cpp/cute/0x_gemm_tutorial.md` 的事),只讲所有 CUTLASS mainloop **一定会用到**的 4 个核心抽象:`Shape` / `Stride` / `Layout` / `Tensor`,以及 6 个常用组合子:`make_shape` / `make_layout` / `make_tensor` / `composition` / `coalesce` / `tile_to_shape`。
+读 Ch5 之前,你需要 CuTe 的"语法熟悉"。这一章不讲 CuTe 怎么写 sgemm(那是 `media/docs/cpp/cute/0x_gemm_tutorial.md` 的事),只讲所有 CUTLASS mainloop **一定会用到**的 4 个核心抽象:`Shape` / `Stride` / `Layout` / `Tensor`,以及 6 个常用组合子:`make_shape` / `make_layout` / `make_tensor` / `composition` / `coalesce` / `tile_to_shape`。
 
 读完之后,你应该能在 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 里把 `SmemLayoutAtomA` / `GmemTiledCopyA` / `TiledMma` 这些名字各自认出来——它们是 `cute::` 类型还是 CollectiveMma 内部的 type alias、各自在 mainloop 里在做什么。
 
@@ -170,9 +170,9 @@ auto Placed = tile_to_shape(Tile,                     // tile 的内部 layout
 // → 在 32×32 的大矩阵里,沿第一维排 4 个 Tile,再沿第二维排 4 个 Tile
 ```
 
-mainloop 里 `SmemLayoutAtomA = tile_to_shape(SwizzleAtom, make_shape(...block_M, ...block_K, Stages), ...)` 就是这个模式:smem 上 A 是 SwizzleAtom 的 layout,再 tile 到 "`BlockM × BlockK × Stages`"的 3D 上。Ch4 会具体讲到。
+mainloop 里 `SmemLayoutAtomA = tile_to_shape(SwizzleAtom, make_shape(...block_M, ...block_K, Stages), ...)` 就是这个模式:smem 上 A 是 SwizzleAtom 的 layout,再 tile 到 "`BlockM × BlockK × Stages`"的 3D 上。Ch5 会具体讲到。
 
-#### 其他常用(略讲,你会在 Ch4/Ch6 看到)
+#### 其他常用(略讲,你会在 Ch5/Ch8 看到)
 
 - `local_tile`:从"大矩阵 + tile 大小 + 起始坐标"切成子 tile。Mainloop 里获取"本 CTA 当前 stage 的 A":
 
@@ -223,7 +223,7 @@ GmemTiledCopyB   SmemLayoutAtomB   SmemCopyAtomB   TransformB
 - 主 mainloop 真正的 smem 写入者是 `GmemTiledCopy` + `SmemLayoutAtom`:**TMA load 按 `GmemTiledCopy` 的指令,把数据写进 `SmemLayoutAtom` 描述的 smem 位置**。`SmemCopyAtom` 在 sm90 上是空,因为 Hopper 直接走 TMA,不需要 smem 内部再 cp。
 - `TransformA/B` 是可选的 layout 变换(identity / interleave / swizzle),严格说不是 atom,但放在同一组模板参数里。
 
-Ch4 的 `CollectiveMma<...>` 模板参数恰好是这 8 个;Ch8 的 builder 推导会一个个把它们算出来。
+Ch5 的 `CollectiveMma<...>` 模板参数恰好是这 8 个;Ch11 的 builder 推导会一个个把它们算出来。
 
 #### 三层 shape 嵌套:AtomLayout / TileShape / ClusterShape
 
@@ -273,7 +273,7 @@ make_tiled_mma(mma_atom, Layout<Shape<_2, _2, _1>>{});  // AtomLayout
 
 这是 `cute::gemm` 的语义总览——5 种 tensor 形态,5 种 dispatch 路径,具体哪条路径根据 dim / mode rank 选。最后都落到 `cute::gemm(...)` 的元编程调度。
 
-**作用**:Ch4 里会出现 `cute::gemm(tiled_mma, A_frag_smem, B_frag_smem, acc)`。这一行的 dispatch 就是根据 `A / B / acc` 的 Layout rank(2D / 3D / V-mode)选具体走哪条 case。**真正的 mma 形态是 WGMMA 还是 cp.async.mma 还是 fp16 还是 fp8,都被吸进 `TiledMma` 内部**——`cute::gemm` 看到的是一致的 Layout 接口。
+**作用**:Ch5 里会出现 `cute::gemm(tiled_mma, A_frag_smem, B_frag_smem, acc)`。这一行的 dispatch 就是根据 `A / B / acc` 的 Layout rank(2D / 3D / V-mode)选具体走哪条 case。**真正的 mma 形态是 WGMMA 还是 cp.async.mma 还是 fp16 还是 fp8,都被吸进 `TiledMma` 内部**——`cute::gemm` 看到的是一致的 Layout 接口。
 
 > **3-arg vs 4-arg**:`cute::gemm` 有两种签名,容易混。
 >
@@ -328,11 +328,11 @@ auto L = Layout<Shape<_32, _32>, Stride<_32, _1>>{};
 auto L_swizzled = composition(Sw, L);   // 应用 swizzle
 ```
 
-主 mainloop 里你看到的所有 `SmemLayoutAtomA = composition(Swizzle<...>, Layout<Shape<...>, Stride<...>>{})` 都是这一步。Ch4 详细讲。
+主 mainloop 里你看到的所有 `SmemLayoutAtomA = composition(Swizzle<...>, Layout<Shape<...>, Stride<...>>{})` 都是这一步。Ch5 详细讲。
 
 ### 3.8 CuTe by example:走读 `examples/cute/tutorial/` 4 个文件
 
-到这里 CuTe 的语法你应该认得出来了。但若你还没跑过任何一个 cute 文件,在 Ch4 之前强烈建议读一遍这 4 个 `examples/cute/tutorial/` 文件,作为"cute 实战的最快入门"(每个文件都很短,核心代码几十行)。
+到这里 CuTe 的语法你应该认得出来了。但若你还没跑过任何一个 cute 文件,在 Ch5 之前强烈建议读一遍这 4 个 `examples/cute/tutorial/` 文件,作为"cute 实战的最快入门"(每个文件都很短,核心代码几十行)。
 
 > 这一节和 `media/docs/cpp/cute/0x_gemm_tutorial.md` 平行,边读边对照。
 
@@ -400,16 +400,215 @@ auto tCgC = thr_mma.partition_S(C);
 
 最后引入 `SM90_TMA_LOAD` + `make_tiled_copy(TMA_LOAD, ...)`。这基本就是 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 内部的简化版本。
 
-> **这 4 个文件是 Ch4 的预习**。读完这 4 个 + 上面 3.1–3.7 的语法,你再看 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 会觉得"每行都认得"。
+> **这 4 个文件是 Ch5 的预习**。读完这 4 个 + 上面 3.1–3.7 的语法,你再看 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 会觉得"每行都认得"。
 
 ### 3.9 章末:读完这一章你该做得到的事
 
-- ✅ 在 Ch4 的 mainloop 代码里认出 `Shape<_M, _N>`、`make_tensor(...)`、`TiledMma`、`SmemLayoutAtomA` 这些名字各自是 CuTe 的哪个组合子。
+- ✅ 在 Ch5 的 mainloop 代码里认出 `Shape<_M, _N>`、`make_tensor(...)`、`TiledMma`、`SmemLayoutAtomA` 这些名字各自是 CuTe 的哪个组合子。
 - ✅ 读得懂 `tile_to_shape(SwizzleAtom, make_shape(...), ...)` 这种"在 mainloop 里到处出现"的复杂表达式。
 - ✅ 看 `cute::gemm(tiled_mma, ...)` 时知道它在走 5-case dispatch。
 - ✅ 用 `cute::print(A_tensor)` 调试 layout 时知道是在按 mainloop 的视图 print。
 
-CuTe 不需要精通——**足够认得出来**就够读 Ch4。
+CuTe 不需要精通——**足够认得出来**就够读 Ch5。
+
+### 3.10 `partition_S` / `partition_D`:把 tile 切成 thread 视图
+
+Ch3.8 的 `sgemm_2.cu` 示例里有一行:
+
+```cpp
+auto tAgA = thr_copy_A.partition_S(A);     // thread 看到的 A 切片
+auto tBgB = thr_copy_A.partition_S(B);
+auto tCgC = thr_mma.partition_S(C);
+```
+
+这是 CuTe **最关键的 thread 分工原语**——mainloop 里每个 thread 拿到自己的 subview,靠的就是它。
+
+#### 语义
+
+`partition_S(Tensor)` = "把这个 Tensor 按我所在的 thread / warp 的位置切出我自己的一片"。
+
+具体说,`thr_mma` 是一个 `ThrMma`(从 `TiledMma.get_thread_slice(threadIdx.x)` 得到),它知道自己"在 TiledMma 整个布局里的什么位置"——`partition_S(C)` 就把这个位置反推到 source Tensor C 上,**返回的 tensor 形状是本 thread 实际要读的子区域**。
+
+```text
+TiledMma                    Source Tensor C
+  ┌─────┬─────┐                ┌─────────┐
+  │Thr 0│Thr 1│   partition_S  │         │
+  ├─────┼─────┤   ─────────►   │         │
+  │Thr 2│Thr 3│                │         │
+  └─────┴─────┘                └─────────┘
+                              ↑ 每个 thread 拿自己那片
+```
+
+类似的 `partition_D(Tensor)` 是"切出 thread 自己作为 destination 的那片"——`tAgA = thr_copy.partition_S(A)`(source)而 `tAsA = thr_copy.partition_D(A_smem)`(destination,smem 上的目标视图)。
+
+#### 为什么这套 API 这么重要
+
+1. **layout 自动推导**——你不用手算 "thread `lane_id` 应该从 smem 的哪个位置读"。CuTe 看 `ThrMma` 内部的 layout 帮你算完。
+2. **copy / mma 对齐**——`thr_copy_A.partition_S(A)` 切出的源 layout 和 `thr_mma.partition_S(A_smem)` 切出的 smem 视图在内存里是**一一对齐的**——`cute::copy(tiled_copy_A, tAgA, tAsA)` 就是把 lane 视角的 A 拷到 lane 视角的 smem A,不需要任何 thread 间的数据交换。
+3. **swizzle 兼容**——smem 上的 `tAsA` 已经把 swizzle 算进去了,partition_D 返回的 layout 里 swizzle 是隐式的(在 smem_ptr engine 上自动应用)。
+
+#### `local_partition`:跨 thread/warp 切
+
+`partition_S` 是单 thread 视图;`local_partition` 是按"thread group"(warp 或 warpgroup)切:
+
+```cpp
+// 把整个 tensor 按 warp 切,本 warp 拿一片
+auto warp_smem = local_partition(smem_layout, warp_idx, Layout<Shape<_4, _1>>{});
+//   ↑ 在 (M, N) 维里,4 个 warp 沿 M 各拿 1/4
+```
+
+`partition_S` 是 `local_partition` 的特例(当 thread group 大小 = 1 时)。mainloop 里**绝大多数**用法是 `partition_S`,因为每个 thread 自己处理自己的 lane fragment。
+
+### 3.11 `cute::copy`:copy 算法 dispatch
+
+`cute::copy` 是 `cute::gemm` 的"孪生兄弟"——dispatch 形态不同:
+
+```text
+cute::copy(src, dst): 把 src 按 src layout 拷到 dst layout 的位置
+cute::copy(tiled_copy, src, dst): 用 TiledCopy 描述的 copy atom,所有 lane 并行拷
+```
+
+#### 单 tensor 版(cute::copy(src, dst))
+
+```cpp
+auto A = make_tensor(A_ptr, Layout<Shape<_128, _128>, Stride<_128, _1>>{});  // gmem row-major
+auto A_smem_view = make_tensor(smem_ptr, smem_layout);                        // smem swizzled
+cute::copy(A, A_smem_view);   // 等价于 memcpy
+```
+
+**不推荐**——这种用法 lane 间不做并行,实际上就是 lane 0 拷全部。性能差。
+
+#### TiledCopy 版(cute::copy(tiled_copy, src, dst))
+
+```cpp
+auto TiledCopyA = make_tiled_copy(SM90_TMA_LOAD, TiledMma_);
+auto thr_copy_A = TiledCopyA.get_thread_slice(threadIdx.x);
+auto tAgA = thr_copy_A.partition_S(A);       // gmem 视图
+auto tAsA = thr_copy_A.partition_D(sA);      // smem 视图
+
+// 每个 lane 用 SM90_TMA_LOAD 的一条指令拷自己那一片
+cute::copy(TiledCopyA, tAgA, tAsA);
+//   ↑ 编译期展开成 lane-parallel copy;每 lane 一条 LDG / cp.async / TMA
+```
+
+**这是 mainloop 写法**。`TiledCopy` 内部的 `Copy_Atom` 决定具体指令:
+- `SM90_TMA_LOAD` → 一条 TMA descriptor load
+- `SM80_CP_ASYNC_16x8x8_F16F16` → cp.async
+- `SM75_U16x8_LD_T` → 普通 LDG
+
+切哪个 `Copy_Atom` 由 builder / dispatch policy 决定。
+
+### 3.12 engine 类型深讲(gmem / smem / rmem)
+
+`make_gmem_ptr` / `make_smem_ptr` / `make_rmem_ptr` 这三种"指针包装"看起来差不多,但**走不同 layout 变换路径**——这是 mainloop 跑对的根本。
+
+#### gmem_ptr:朴素指针
+
+```cpp
+auto gptr = make_gmem_ptr(raw_ptr);   // type tag = "gmem"
+auto A = make_tensor(gptr, Layout<M, N>{});
+//   ↑ gmem ptr 上的 layout:index 就是字节偏移 / sizeof(elem)
+```
+
+layout 算出来的 index 就是从 raw_ptr 出发的字节 offset,**没有修饰**。
+
+#### smem_ptr:swizzle-aware
+
+```cpp
+auto sptr = make_smem_ptr(smem_addr);   // type tag = "smem"
+auto A_smem = make_tensor(sptr, composition(Swizzle<3,3,3>{}, Layout<...>{}));
+//   ↑ smem ptr 上的 Swizzle 会被实际应用到访问模式
+```
+
+**关键差异**:当你把 `A_smem` 的 layout 里含有 Swizzle 时,cute::copy / cute::gemm 会按 Swizzle **真的改写访问的 smem 地址**——同一个物理 smem buffer,Swizzle 让不同 lane 看到不同的偏移,避免 bank conflict。如果用 `make_gmem_ptr` + 同样的 layout,Swizzle 不会被解释——它只是 layout 的一个抽象,没有"落到真实访问"这一步。
+
+#### rmem_ptr:寄存器视图
+
+```cpp
+auto rptr = make_rmem_ptr(register_ptr);   // type tag = "rmem"
+auto frag = make_tensor(rptr, ...layout...);
+//   ↑ layout 直接决定 lane 拿到哪些寄存器分量
+```
+
+`TiledMma` 里 partition_S(C) 返回的 tensor 用 `make_rmem_ptr` 包装——layout 描述了"32 lane 各拿哪个 fragment 的哪个寄存器"。`cute::gemm(tiled_mma, ...)` 看到的是 rmem tensor,直接展开成 mma 指令。
+
+> **你手写 GEMM 的对照**:你写"lane_id 算 smem 偏移时考虑 swizzle"、"lane_id 算 fragment 寄存器"——CUTLASS 把这两步**隐式包进 smem_ptr / rmem_ptr 的 type tag 里**。所以 mainloop 代码完全没出现手动算偏移。
+
+#### 选错会怎样
+
+```cpp
+// 错误:smem buffer + gmem_ptr → swizzle 被吞掉,跑出来 bank conflict 严重
+auto A_smem = make_tensor(make_gmem_ptr(smem_addr), swizzled_layout);
+
+// 正确:smem buffer + smem_ptr + swizzled layout
+auto A_smem = make_tensor(make_smem_ptr(smem_addr), swizzled_layout);
+```
+
+这条 mainloop 代码里几乎**不会写错**——builder 帮你生成的 `SmemLayoutA` 都用 `make_smem_ptr` 包装,你直接拿来用就行。但如果你在 smem 上做 smem-to-smem copy(比如把 data 从一个 swizzled layout 拷到另一个),记得用 smem_ptr engine。
+
+### 3.13 layout 函数 zoo:zipped_divide / blocked_product / flat_product
+
+除 `composition` / `coalesce` / `tile_to_shape` 之外,mainloop 还常用这 3 个 layout 函数,这里一并讲清。
+
+#### `zipped_divide`:把高维 layout 拆成"高维 × 低维"
+
+```cpp
+// 假设 layout 是 (M, N, K) = (16, 16, 8)
+auto L = Layout<Shape<_16, _16, _8>, Stride<...>>{};
+
+// 沿 K 维 split 成 "16*16 个 K-tile"
+auto L_zipped = zipped_divide(L, make_shape(_1, _1, _8));
+//   → shape: (16, 16, 8)   (K 维被保留为独立 mode)
+//   → 解读:第一个 (16, 16) 是 outer,后面的 8 是 inner
+```
+
+`zipped_divide` 比 `tile_to_shape` 更"对称"——保留所有 mode,只把一个 mode 拆成"outer × inner"两段。
+
+#### `blocked_product`:两个 layout 的"块化笛卡尔积"
+
+```cpp
+auto A = Layout<Shape<_128, _128>, Stride<_128, _1>>{};        // 128x128 row-major
+auto B = Layout<Shape<_8, _8>, Stride<_8, _1>>{};             // 8x8 row-major tile
+
+auto P = blocked_product(A, B);   // shape = (128/8, 128/8, 8, 8) = (16, 16, 8, 8)
+//   ↑ 16x16 个 8x8 tile 排成 128x128 大矩阵
+```
+
+跟 `tile_to_shape` 区别:`tile_to_shape` 把 tile 摊到大矩阵上,`blocked_product` 同时保留 inner / outer 两套 stride 信息。
+
+#### `flat_product`:outer × inner 但 inner 摊平
+
+```cpp
+auto P = flat_product(A, B);     // shape = (128/8, 128/8, 64)
+//   ↑ inner 的 8x8 = 64 个元素被摊平成 1 维
+```
+
+`flat_product` 用于"内层按 1 维连续访问"的场景——典型是把 tile 的所有元素看作 1 个连续的 inner 块。
+
+#### 这 3 个跟 `composition` / `tile_to_shape` 的关系
+
+| 函数 | 干什么 | 典型用法 |
+|---|---|---|
+| `composition(A, B)` | "先 B 后 A" 的函数复合 | swizzle composition |
+| `coalesce(L)` | 合并相邻同 shape mode | compiler 友好 |
+| `tile_to_shape(T, shape, step)` | 把 tile T 摊到 shape 大矩阵 | smem layout |
+| `zipped_divide(L, factor)` | 沿某个 mode split outer/inner | mainloop K 维 split |
+| `blocked_product(A, B)` | 两 layout 笛卡尔积 + 块化 | wgmma tile 嵌套 |
+| `flat_product(A, B)` | blocked 但 inner 摊平 | 1 维连续访问 |
+
+mainloop 里你看到这些函数,知道它们在表达什么就行——具体怎么组合是 builder / atom 的事。
+
+### 3.14 章末(扩充):读完这一章你该做得到的事
+
+- ✅ 在 Ch5 的 mainloop 代码里认出 `Shape<_M, _N>`、`make_tensor(...)`、`TiledMma`、`SmemLayoutAtomA` 这些名字各自是 CuTe 的哪个组合子。
+- ✅ 读得懂 `tile_to_shape(SwizzleAtom, make_shape(...), ...)` 这种"在 mainloop 里到处出现"的复杂表达式。
+- ✅ 看 `cute::gemm(tiled_mma, ...)` 时知道它在走 5-case dispatch。
+- ✅ 看 `cute::copy(tiled_copy, ...)` 时知道它在走 TMA / cp.async / LDG 之一(由 atom 决定)。
+- ✅ 看到 `partition_S` / `partition_D` 知道是"切出本 thread 的子 view"——`cute::copy` 用 src / dst 配对保证 lane 间对齐。
+- ✅ 区分 gmem_ptr / smem_ptr / rmem_ptr 在 layout 解释上的差异(smem_ptr 应用 swizzle,rmem_ptr 决定 fragment 寄存器)。
+- ✅ 用 `cute::print(A_tensor)` 调试 layout 时知道是在按 mainloop 的视图 print。
+
+CuTe 不需要精通——**足够认得出来**就够读 Ch5。
 
 ---
 

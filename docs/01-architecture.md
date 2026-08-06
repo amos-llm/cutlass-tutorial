@@ -1,6 +1,6 @@
 ## 第 1 章:5 层架构图(整体鸟瞰)
 
-本章只立骨骼:每一层是谁、长在哪个文件、它做什么。具体细节在 Ch2–Ch11 展开。
+本章只立骨骼:每一层是谁、长在哪个文件、它做什么。具体细节在 Ch2–Ch10 展开。
 
 ### 1.1 第 1 层:Adapter(host 句柄)
 
@@ -59,9 +59,9 @@ using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
 主文件:`include/cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized.hpp`。
 
-**角色**:把 A/B 从 gmem 拉入 smem、smem 入 register、用 WGMMA / UMMA 做 mma、再把结果放进 accumulator。这一层封装最繁——这一章只在 Ch4 才展开。
+**角色**:把 A/B 从 gmem 拉入 smem、smem 入 register、用 WGMMA / UMMA 做 mma、再把结果放进 accumulator。这一层封装最繁——这一章只在 Ch5 才展开。
 
-调用接口标准签名(对任意架构、任意 mma 形态;成员对应 Ch4.3 的实际实现):
+调用接口标准签名(对任意架构、任意 mma 形态;成员对应 Ch5.3 的实际实现):
 
 ```cpp
 struct CollectiveMma {
@@ -92,11 +92,11 @@ struct CollectiveMma {
 };
 ```
 
-> ⚠ 这里**没有** `load_wait` / `mma_next`——早期 CUTLASS 草稿里有这两个 helper,后来为了减少函数拆分,等价的 `consumer_wait(state)` 与 `state++` 已经直接内联在 `mma(...)` 的函数体里。这一节只列当前实际存在的成员,Ch4.3 给出对应实现。
+> ⚠ 这里**没有** `load_wait` / `mma_next`——早期 CUTLASS 草稿里有这两个 helper,后来为了减少函数拆分,等价的 `consumer_wait(state)` 与 `state++` 已经直接内联在 `mma(...)` 的函数体里。这一节只列当前实际存在的成员,Ch5.3 给出对应实现。
 
 这一层决定:加载用 TMA 还是 cp.async、A 从 smem 还是直接 rmem、单 vs 双 warp-group、FP8 block-scale 等等。
 
-> **你手写 GEMM 的对照**:你的 mainloop 函数——`__device__ void main_loop(cta, k_iter)` 自己写所有这些。CUTLASS 把这些都内置,你要选哪个变体,就换 dispatch policy(Ch7)。
+> **你手写 GEMM 的对照**:你的 mainloop 函数——`__device__ void main_loop(cta, k_iter)` 自己写所有这些。CUTLASS 把这些都内置,你要选哪个变体,就换 dispatch policy(Ch9)。
 
 ### 1.4 第 4 层:CollectiveEpilogue(写回 + 融合)
 
@@ -143,7 +143,7 @@ arguments.scheduler.raster_order     = options.raster;       // AlongN / AlongM 
 arguments.scheduler.max_swizzle_size = options.swizzle;      // 1 / 2 / 4 / 8
 ```
 
-> **你手写 GEMM 的对照**:你的 `grid_dim` 计算 + `blockIdx` 分配策略。CUTLASS 默认走"persistent + swizzle + raster"——见 Ch6 详细。
+> **你手写 GEMM 的对照**:你的 `grid_dim` 计算 + `blockIdx` 分配策略。CUTLASS 默认走"persistent + swizzle + raster"——见 Ch8 详细。
 
 ### 1.6 三句话侧栏:这些 `sm90_*_warpspecialized` 文件不是"5 个不同实现"
 
@@ -156,7 +156,7 @@ arguments.scheduler.max_swizzle_size = options.swizzle;      // 1 / 2 / 4 / 8
 |类型|f16 / bf16 / tf32 / fp8 / fp8+block-scaling / mixed-input / sparse|
 |输入|A/B 都是 gmem(A gmem→smem) / A register(A gmem→register→mma)|
 
-第 7 章会讲——这种变体是怎么靠"tag-inheritance"模式**同构**地生成的,你改 dispatch policy tag 就换实现,不用"换文件"。
+第 9 章会讲——这种变体是怎么靠"tag-inheritance"模式**同构**地生成的,你改 dispatch policy tag 就换实现,不用"换文件"。
 
 ---
 

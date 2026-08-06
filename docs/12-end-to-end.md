@@ -1,4 +1,4 @@
-## 第 9 章:`examples/49`——一个用户故事
+## 第 12 章:`examples/49`——一个 End-to-End 集成示例
 
 文件:`examples/49_hopper_gemm_with_collective_builder/49_collective_builder.cu`。
 
@@ -97,7 +97,7 @@ if constexpr (UseCustomEVT) {
 
 当用户在 `ExampleRunner<Pingpong, ...>` 改 MainloopScheduleType:
 
-1. **MainloopScheduleType** = `KernelTmaWarpSpecializedPingpong`——这直接传到 `CollectiveBuilder`(Ch8)。Builder 看到这是一个具体 tag(不是 Auto),直接:
+1. **MainloopScheduleType** = `KernelTmaWarpSpecializedPingpong`——这直接传到 `CollectiveBuilder`(Ch11)。Builder 看到这是一个具体 tag(不是 Auto),直接:
    - 选 partial spec `CollectiveBuilder<Sm90, TmaWarpSpecializedPingpong, ...>`
    - 推 DispatchPolicy = `MainloopSm90TmaGmmaWarpSpecializedPingpong<Stages, ClusterShape, KernelTmaWarpSpecializedPingpong>`
    - 该 DispatchPolicy 推导具体 mainloop 实例化(就是 `sm90_mma_tma_gmma_ss_warpspecialized_pingpong.hpp` 的 partial spec)
@@ -107,12 +107,12 @@ if constexpr (UseCustomEVT) {
 3. **StageCountType** = `StageCount<4>`(强制 4 stage)。Builder 跳过 auto 算法,直接用 4。
 
 4. **TileSchedulerType** = `StreamKScheduler`(切到 StreamK)。
-   - `GemmUniversal<..., StreamKScheduler>` 的 SFINAE 路由(Ch6.1)— 因为 `StreamKScheduler` 不在 mainloop 的 kernel schedule tree 里,只影响 kernel 匹配的 TileScheduler。
+   - `GemmUniversal<..., StreamKScheduler>` 的 SFINAE 路由(Ch8.1)— 因为 `StreamKScheduler` 不在 mainloop 的 kernel schedule tree 里,只影响 kernel 匹配的 TileScheduler。
    - 这会进 `sm90_tile_scheduler_stream_k.hpp` 的 partial spec。
 
 ### 9.4 这章的 takeaway
 
-读 `examples/49` 时反复出现的 4 个 `*Type` template 参数 + `UseCustomEVT` bool,**对应 Ch7 (dispatch policy) + Ch8 (builder) + Ch5 (EVT) + Ch6 (scheduler) 这 4 件事**。
+读 `examples/49` 时反复出现的 4 个 `*Type` template 参数 + `UseCustomEVT` bool,**对应 Ch9 (dispatch policy) + Ch11 (builder) + Ch6 (EVT) + Ch8 (scheduler) 这 4 件事**。
 
 每一件都对应一个"切来切去只改一行 type alias"的具体动作:
 

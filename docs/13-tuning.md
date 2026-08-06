@@ -1,4 +1,4 @@
-## 第 10 章:调参世界观 + `cutlass_profiler`
+## 第 13 章:调参世界观 + `cutlass_profiler`
 
 这一章不讲新机制——只是把 Ch1-9 给的所有"开关"整理成一张调参表,以及"怎么科学地 autotune"。
 
@@ -13,8 +13,8 @@
 |**tile size**(M×N×K)|Ch2.2|`TileShape<>...>`, 一般 128/128/32 或 128/256/64|
 |**cluster size**|Ch2.2|`ClusterShape<>...>`, 一般 4×2×1 / 4×4×1 / 8×8×1|
 |**stage 数**|Ch2.3|`StageCount<N>` 强制;Auto 默认从 smem 推|
-|**schedule 变体**|Ch7|`KernelTmaWarpSpecialized` 默认; Pingpong / Cooperative 更大 tile|
-|**scheduler**|Ch6.7|`PersistentScheduler` 默认; `StreamKScheduler` 用于 K-bound|
+|**schedule 变体**|Ch9|`KernelTmaWarpSpecialized` 默认; Pingpong / Cooperative 更大 tile|
+|**scheduler**|Ch8.7|`PersistentScheduler` 默认; `StreamKScheduler` 用于 K-bound|
 |**raster / swizzle**|Ch2.4|`arguments.scheduler.raster_order` / `max_swizzle_size`|
 
 > **你手写 GEMM 的对照**:这些就是你 grid_dim / block_dim / smem 切分 / cluster_dim / pipeline depth / swizzle 选型的全部决定项——CUTLASS 只是把它们"显式化"了。
@@ -128,7 +128,7 @@ make -j cutlass_profiler
 
 - ✅ 用 `cutlass_profiler --operation=Gemm --cta_m=128 --cta_n=128 --cta_k=32 --stages=4 ...` 跑一次 baseline。
 - ✅ 在不同的 (M, N, K) shape 上用表格 10.2 推荐一组 tile+cluster,各自 profiler 一遍。
-- ✅ 在 Ch9 的 `ExampleRunner<>` 里调 4 个 `*Type` 参数,配合 `cutlass_profiler` 评测。
+- ✅ 在 Ch12 的 `ExampleRunner<>` 里调 4 个 `*Type` 参数,配合 `cutlass_profiler` 评测。
 - ✅ 懂得 `cutlass_profiler` 输出的几个数字怎么解读(GFLOPS、有效率、瓶颈分析)。
 
 ---

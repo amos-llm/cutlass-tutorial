@@ -1,8 +1,8 @@
-## 第 8 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
+## 第 10 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
 
 ### 8.0 sm90_gmma_builder.inl 里的 8 个 partial spec 怎么分
 
-`sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。读 Ch8 之前先认清这 8 个 spec,否则 §8.2 给你看的「最大那个」会让你不知道还有别的,也不知道为什么自己的配置落到那个 spec。
+`sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。读 Ch11 之前先认清这 8 个 spec,否则 §8.2 给你看的「最大那个」会让你不知道还有别的,也不知道为什么自己的配置落到那个 spec。
 
 每个 spec 都被一段 `cute::enable_if_t<...>` 在模板参数末尾分流。**13 个模板参数里,所有 spec 都共用前 12 个(arch, op_class, element, layout, alignment × 2, accumulator, tile, cluster, stage_count),唯一的分流维度是第 13 个 —— `KernelScheduleType`**。具体说,3 个开关决定落到哪个 spec:
 
