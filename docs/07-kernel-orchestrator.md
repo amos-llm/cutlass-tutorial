@@ -101,83 +101,85 @@ pattern 你已经熟了: union(主要内存)、pipeline storage(流水线屏障)
 
 ```cpp
 CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
-  // 计算 thread / warp 角色
-  int warp_idx             = threadIdx.x / 32;
-  int warp_group_idx       = warp_idx / 4;     // 4 warp/warp group
-  int lane_predicate       = cute::elect_one_sync();
-  bool is_main_producer    = (warp_group_idx == 0);   // producer warp group
-  bool is_main_consumer    = (warp_group_idx == 1);   // consumer warp group
-  WarpGroupRole warp_group_role = is_main_producer ? Producer : Consumer;
+  // 计算 thread / warp / warp-group 角色(`sm90_gemm_tma_warpspecialized.hpp:297-304`)
+  int thread_idx             = int(threadIdx.x);
+  int warp_idx               = canonical_warp_idx_sync();
+  int warp_idx_in_warp_group = warp_idx % NumWarpsPerWarpGroup;
+  int warp_group_thread_idx  = thread_idx % NumThreadsPerWarpGroup;
+  WarpGroupRole warp_group_role     = WarpGroupRole(canonical_warp_group_idx());
+  ProducerWarpRole producer_warp_role = ProducerWarpRole(warp_idx_in_warp_group);
+  int lane_predicate         = cute::elect_one_sync();
 
-  // SharedMemory 划分
-  TensorStorage&   shared_storage_tensors   = *reinterpret_cast<TensorStorage*>(smem_buf);
-  PipelineStorage& shared_storage_pipelines = *reinterpret_cast<PipelineStorage*>(
-      smem_buf + sizeof(TensorStorage));
+  // SharedMemory 划分(联合体 + pipeline storage,见 §7.2)
+  SharedStorage& shared_storage = *reinterpret_cast<SharedStorage*>(smem_buf);
 
-  // 所有 CTA 单线程预取 TMA descriptor
+  // 所有 CTA 单线程预取 TMA descriptor(`sm90_gemm_tma_warpspecialized.hpp:309`)
   if (warp_idx == 0 && lane_predicate) {
     CollectiveMainloop::prefetch_tma_descriptors(params.mainloop);
     CollectiveEpilogue::prefetch_tma_descriptors(params.epilogue);
   }
 
-  // 准备 mainloop pipeline 参数
-  typename CollectiveMainloop::PipelineParams mainloop_pipe_params;
-  if (warp_group_role == Producer) {
-    mainloop_pipe_params.role = MainloopPipeline::ThreadCategory::Producer;
+  // 准备 mainloop pipeline 参数(`sm90_gemm_tma_warpspecialized.hpp:315-326`)
+  using MainloopPipeline = typename CollectiveMainloop::MainloopPipeline;
+  typename MainloopPipeline::Params mainloop_pipeline_params;
+  if (warp_group_role == WarpGroupRole::Producer &&
+      producer_warp_role == ProducerWarpRole::MainloopEpilogue) {
+    mainloop_pipeline_params.role = MainloopPipeline::ThreadCategory::Producer;
   }
+  if (warp_group_role == WarpGroupRole::Consumer) {
+    mainloop_pipeline_params.role = MainloopPipeline::ThreadCategory::Consumer;
+  }
+  mainloop_pipeline_params.is_leader = warp_group_thread_idx == 0;
+  mainloop_pipeline_params.num_consumers = NumThreadsPerWarpGroup;
 
   // CTA 内的"互相 barrier"被组装好
   cutlass::arch::wait_for_dependent_instruction();
   __syncthreads();
 
   // 主循环:每个 CTA 处理多个 tile(persistent)
-  while (true) {
-    // 1) 决定本 CTA 这一轮跑哪个 tile — fetch_next_work 返回 pair
-    auto [work_tile_info, increment_pipe] =
-        TileScheduler::fetch_next_work(params.scheduler);
-    auto [m_coord, n_coord, l_coord] = work_tile_info;     // WorkTileInfo 只有 M/N/L idx
+  WorkTileInfo work_tile_info{};                       // 初始 is_valid() == false → do-while 立刻退出
+  do {
+    // 1) 计算本 tile 在 mainloop / epilogue 里需要的 K 维长度(K 不在 WorkTileInfo 里)
+    auto k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape, CtaShape_MNK{});
+    auto k_tile_start = TileScheduler::get_work_k_tile_start(work_tile_info);
 
-    if (!work_tile_info.is_valid()) {
-      break;   // 全部分配完了
+    // 2) Producer 主循环(只有 MainloopEpilogue 这一根 warp 真正干 mainloop;其余 warp 做 epilogue)
+    if (warp_group_role == WarpGroupRole::Producer &&
+        producer_warp_role == ProducerWarpRole::MainloopEpilogue) {
+      CollectiveMainloop::load(...);
+      // ... 详见 §7.4
     }
 
-    // 2) 计算在本 tile 内 K 维 split(用于 K-loop 边界) — K 不在 WorkTileInfo 里
-    int k_tile_count = TileScheduler::get_work_k_tile_count(work_tile_info, problem_shape, tile_shape);
-    int k_tile_idx   = TileScheduler::get_work_k_tile_start(work_tile_info);
-
-    // 3) Producer 主循环
-    if (warp_group_role == Producer) {
-      CollectiveMainloop::load_init(...);
-      PipelineState write_state = make_producer_start_state<MainloopPipeline>();
-      // ... 详见 7.4
+    // 3) Consumer 主循环
+    if (warp_group_role == WarpGroupRole::Consumer) {
+      CollectiveMainloop::mma(...);
+      // ... 详见 §7.4
     }
 
-    // 4) Consumer 主循环
-    if (warp_group_role == Consumer) {
-      CollectiveMainloop::load_init(...);
-      PipelineState read_state{};   // default-construct,初相位与 producer 反相
-      // ... 详见 7.4
-    }
-
-    // 5) 收尾:epilogue
+    // 4) 收尾:epilogue
     CollectiveEpilogue::operator()(..., work_tile_info);
 
-    // 6) cluster barrier(等待同 cluster 的兄弟 CTA 都跑完本 tile 才进入下一 tile)
-    cluster_arrive();
-    cluster_wait();
-  }
+    // 5) cluster barrier(同 cluster 的兄弟 CTA 跑完本 tile 才进入下一 tile)
+    cute::cluster_arrive_relaxed();
+    cute::cluster_wait();
+
+    // 6) 询问调度器下个 tile — 返回 (WorkTileInfo next, bool increment_pipe)
+    auto [next_work_tile_info, increment_pipe] =
+        scheduler.fetch_next_work(work_tile_info);
+    work_tile_info = next_work_tile_info;
+  } while (work_tile_info.is_valid());
 }
 ```
 
 注释:
 
 - `cute::elect_one_sync()`:32 lane 里选 1 个 candidate,(true/false)标记谁做幂等的"单线程"操作(如 TMA descriptor 预取)。
-- `WarpGroupRole { Producer, Consumer }` + `ProducerWarpRole { MainloopEpilogue, Warp1, Warp2, Warp3 }`:更细的角色切分在 epilogue / 多 producer 的变体里出现。
-- `cluster_arrive` / `cluster_wait`:cluster 内 CTA 一起同步(在本例子是让同 cluster 的所有 CTA 都跑完本 tile 才进入下一 tile)。
-- **`k_tile_count` 和 `k_tile_idx` 在不同调度器下含义不同**(关键!):
-  - `Persistent / StaticPersistent / DynamicPersistent`:`k_tile_count = ceil(K / tile_K)`,`k_tile_idx = 0`——一个 worker 包整个 K 轴。
-  - `StreamK`:`k_tile_count` 是本 worker 实际算的 K 子区间长度,**未必等于完整 K**;`k_tile_idx` 是 K 子区间的起点。
-  - `Group`:`k_tile_count = ceil(K / tile_K)`,`k_tile_idx = 0`(每个 group 的 K 是独立的)。
+- `WarpGroupRole { Producer, Consumer }` + `ProducerWarpRole { MainloopEpilogue, Warp1, Warp2, Warp3 }`:更细的角色切分——只有 `Producer / MainloopEpilogue` 这一根 warp 真正跑 mainloop;`Producer / Warp1/2/3` 这些 warp 落到 epilogue 一侧(详细看 Ch6)。
+- `cute::cluster_arrive_relaxed()` / `cute::cluster_wait()`:cluster 内所有 CTA 一起同步(同 cluster 的兄弟 CTA 跑完本 tile 才进入下一 tile;sm100 DynamicPersistent 还在 cluster_wait 里等 CLC response)。
+- **`k_tile_count` 和 `k_tile_start` 在不同调度器下含义不同**(关键!):
+  - `Persistent / StaticPersistent / DynamicPersistent`:`k_tile_count = ceil(K / tile_K)`,`k_tile_start = 0`——一个 worker 包整个 K 轴。
+  - `StreamK`:`k_tile_count` 是本 worker 实际算的 K 子区间长度,**未必等于完整 K**;`k_tile_start` 是 K 子区间的起点。
+  - `Group`:`k_tile_count = ceil(K_i / tile_K)`,`k_tile_start = 0`(每个 group 的 K 是独立的)。
 
 ### 7.4 Producer / Consumer 主循环(俯视)
 
