@@ -229,7 +229,7 @@ struct MmaPipelined {
 - 写一个新 dispatcher("依问题尺寸选 schedule")
 - 写一个新 builder 选项
 
-入口就在 `dispatch_policy.hpp` + `kernel/sm90_*.hpp` 的 SFINAE 路由 + `kernel/detail/` helper。
+入口就在 `dispatch_policy.hpp` + `kernel/sm90_*.hpp` 的 SFINAE 路由 + `cutlass::gemm::detail` helper(在 `include/cutlass/gemm/gemm.h`,见 §8.4)。
 
 ### 8.9 章末:读完这一章你该做得到的事
 

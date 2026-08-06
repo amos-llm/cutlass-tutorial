@@ -79,7 +79,7 @@ namespace cute::TMEM {
   class Allocator1Sm {  // line 60
   public:
     static constexpr int ColumnsPerAllocationSlice = 32;
-    static constexpr int Sm100Tmemusage 容量Columns = 512;
+    static constexpr int Sm100TmemCapacityColumns = 512;  // TMEM 容量: 512 columns
     __device__ Allocator1Sm() { }
 
     // 申请 num_columns 个 column 的 TMEM(必须是 32 的倍数, ≤ 512)

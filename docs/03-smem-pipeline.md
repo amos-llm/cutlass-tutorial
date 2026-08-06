@@ -46,7 +46,7 @@ CUTLASS 用 **mbarrier**(NVIDIA 的 hardware barrier,Hopper+ 引入)实现这套
 | `PipelineTmaStore<Stages>` | `sm90_pipeline.hpp:655` | **epilogue 的 register → smem → gmem**(TMA store) | register → smem(producer)、smem → gmem(TMA)|
 | `PipelineAsync<Stages>` | `sm90_pipeline.hpp:1015` | **不用 TMA 的 smem 路径**(cp.async,sm80 旧式)| gmem → smem(cp.async producer)、smem → register(consumer)|
 | `PipelineTransactionAsync<Stages>` | `sm90_pipeline.hpp:766` | 多生产者协同时的 transactional 路径(避免同一 stage 被多个 producer 抢)| 同 PipelineAsync,但带 transaction semantics |
-| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `cutlass/pipeline/sm100_pipeline.hpp:935` | **Sm100 调度器的 CLC pipeline**(Ch11 §11.3)| 调度器专用,被 `sm100_*_warpspecialized*.hpp` 各调度器用 |
+| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `include/cutlass/pipeline/sm100_pipeline.hpp:935` | **Sm100 调度器的 CLC pipeline**(Ch11 §11.3)| 调度器专用,被 `sm100_*_warpspecialized*.hpp` 各调度器用 |
 
 注意 Hopper 上**默认 mainloop 走 `PipelineTmaAsync`**——TMA 的 `arrive_and_expect_tx` 由 producer 发起,`complete_transaction` 由硬件在 TMA 写完时自动调用,**producer 那边不需要显式 `commit`**。这跟 Ampere 时代的 cp.async 路径不一样。
 
@@ -76,7 +76,7 @@ void producer_commit(PipelineState state, uint32_t bytes) {
 }
 ```
 
-为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch4 mainloop §4.8 会强调)。
+为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch5 §5.2.6 与 §5.5 会从 mainloop 代码层面再强调一遍)。
 
 #### Consumer 侧
 

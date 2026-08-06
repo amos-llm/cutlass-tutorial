@@ -27,7 +27,7 @@
 §10.3  新类型宇宙:block-scaled(mx_*)与窄精度
 §10.4  examples/70_blackwell_gemm/ 走查(对应 examples/48)
 §10.5  起步路径(5 个入口文件)
-§10.6  章末:从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
+§10.6  从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
 §10.7  章末:读完这一章你该做得到的事
 ```
 
@@ -99,12 +99,14 @@ examples/48_hopper_warp_specialized_gemm/      examples/70_blackwell_gemm/
   using LayoutA = ...;                          using LayoutA = ...;
   using TileShape = Shape<_128, _128, _32>;      using TileShape = Shape<_128, _128, _32>;  // 形状可以一样
   using ClusterShape = Shape<_2, _1, _1>;       using ClusterShape = Shape<_2, _1, _1>;   // 形状可以一样
-                                                using ArchTag = cutlass::arch::Sm100;      // ← 唯一差别
+                                                using ArchTag = cutlass::arch::Sm100;      // ← 唯一新增的顶层 using
   using CollectiveMainloop = CollectiveBuilder<
-      cutlass::arch::Sm90, ...                  // Sm90 → Sm100
+      cutlass::arch::Sm90, ...
+      ...                                       // Sm90 → Sm100
   >;
   using CollectiveEpilogue = CollectiveBuilder<
-      cutlass::arch::Sm90, ...                  // Sm90 → Sm100
+      cutlass::arch::Sm90, ...
+      ...                                       // Sm90 → Sm100
   >;
   using GemmKernel = GemmUniversal<...>;        // 同
   using Gemm = GemmUniversalAdapter<GemmKernel>; // 同
@@ -112,7 +114,7 @@ examples/48_hopper_warp_specialized_gemm/      examples/70_blackwell_gemm/
 
 **关键观察**:
 
-- 5 行 `using` (ElementA/B/C/D + LayoutA/B/C/D 之类)**完全相同**——`examples/70` 跟 `examples/48` 的差别**只有** `ArchTag` 是 `Sm100` 还是 `Sm90`。
+- 5 行 `using` (ElementA/B/C/D + LayoutA/B/C/D 之类)**完全相同**——`examples/70` 比 `examples/48` 多出来的顶层 typedef 只有 `ArchTag = Sm100`(下面 CollectiveBuilder 的第 1 个 arch 参数也跟着改)。
 - CollectiveBuilder 看到 `Sm100` 自动路由到 sm100 族的 partial spec——你**不需要**手动选 `KernelTmaWarpSpecializedSm100` 这类 tag(让 `KernelScheduleAuto` 替你选)。
 - `examples/70_blackwell_gemm/` 物理文件跟 `examples/48_hopper_warp_specialized_gemm/` 几乎一样长,逐行能对照。
 
@@ -128,19 +130,19 @@ examples/48_hopper_warp_specialized_gemm/      examples/70_blackwell_gemm/
 |**Python DSL guide**|`media/docs/pythonDSL/mma_docs/tcgen05_programming.rst`|若用 CuTe Python 路径的等价入手|
 |**inline 教程**|`examples/cute/tutorial/blackwell/01_mma_sm100.cu ... 05_mma_tma_epi_sm100.cu`|与 `examples/cute/tutorial/hopper/wgmma_sm90.cu` 镜像结构|
 
-`blackwell_cluster_launch_control.md`(在 `media/docs/cpp/` 下)讲 sm_100 新加的 cluster 同步原语 — cluster 比 sm_90 更大,用新原语管理。详细 CLC 入门见 §10.5。
+`blackwell_cluster_launch_control.md`(在 `media/docs/cpp/` 下)讲 sm_100 新加的 cluster 同步原语 — cluster 比 sm_90 更大,用新原语管理。详细 CLC 入门见 Ch11 §11.3(§10.5 只是 5 个入口文件清单,不含 CLC 内容)。
 
-### 10.6 章末:从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
+### 10.6 从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
 
 |不变|变|
 |---|---|
-|5 层框架(`GemmUniversalAdapter` / `GemmUniversal` / `CollectiveMma` / `CollectiveEpilogue` / `*TileScheduler`)类名与方法签名|Tag 树根换:`KernelTmaWarpSpecialized*` → `KernelTmaWarpSpecializedSm100*` / `KernelTmaWarpSpecialized1SmSm100` / `KernelTmaWarpSpecialized2SmSm100`(`include/cutlass/gemm/dispatch_policy.hpp`)|
+|5 层框架(`GemmUniversalAdapter` / `GemmUniversal` / `CollectiveMma` / `CollectiveEpilogue` / `*TileScheduler`)类名与方法签名|Tag 树根换:`KernelTmaWarpSpecialized*` → `KernelTmaWarpSpecializedSm100*` / `KernelTmaWarpSpecializedBlockScaledSm100` / `KernelTmaWarpSpecialized1SmSm100` / `KernelTmaWarpSpecialized2SmSm100`(`include/cutlass/gemm/dispatch_policy.hpp`,4 个变体)|
 |Builder(`CollectiveBuilder`)的"用 13 维参数拼实例化"配方|MMA atom 来源:sm90 走 `cute::ss_op_selector<TileShape_MNK, ElementA, ElementB, ElementAccumulator, ...>()`(`include/cute/arch/mma_sm90.hpp:366`,按 dtype + tile 选 GMMA 指令);sm100 走 `cute::UMMA::Major::K/MN` + `cutlass::gemm::collective::detail::tag_to_umma_major_A/B<GmemLayoutATag/B>()`(`include/cutlass/gemm/collective/builders/sm1xx_common.inl:95/117`),builder 内联构造 atom(`include/cute/atom/mma_traits_sm100.hpp`)|
-|`Examples/48` 的 4 步 host API 写法(`using` → builder → adapter → run)|对应 `Examples/70_blackwell_gemm/` 同样 4 步(逐行对应 Ch2)|
+|`Examples/48` 的 5 步 host API 写法(实例化 → arguments → workspace → can_implement+initialize → launch)|对应 `Examples/70_blackwell_gemm/` 同样 5 步(逐行对应 Ch1 §1.1)|
 |Ch6 的 EVT 写法(`Sm90EVT<Sm90Compute<...>, ...>`)|EVT 在 sm100 上由 sm100 epilogue 接管,但 AST 语法完全一致(根节点的算子是 `Sm100*Compute` 而不是 `Sm90*Compute`)|
 |`PersistentTileScheduler` 选 tile|sm100 新加 cluster 同步原语 `cluster_launch_control`(见 Ch11 §11.3)|
 
-另外两个**整个体系新增**的事:
+另外三个**整个体系新增**的事:
 
 |新增方向|对哪一层|
 |---|---|

@@ -1,4 +1,4 @@
-## 第 4 章:深入 CollectiveMainloop(本教程核心价值)
+## 第 4 章:CollectiveMainloop 概览(类头 + 类型别名 + 三阶段 + 契约 + Cluster)
 
 如果本教程只选一章细读,选这一章。Mainloop 是 CUTLASS 3.x 写得最繁的部分——也是体现"5 层抽象是否值钱"的地方。
 
@@ -173,7 +173,7 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 > 你写 Hopper 时如果用过 cluster launch(`cudaLaunchKernelEx` + `clusterDim`),这里对应。CTA 间 DSMEM 互访省 smem 注册流量——尤其在大 BlockM × BlockN 的 tile 上。
 
-`load` 里 `get_slice(cluster_local_block_id)`(Ch4.5.2)就是 cluster 协作在 TMA 加载时的物理实现:每个 CTA 拿 TMA desc 的不同切片,**整个 cluster 协作加载同一个 (BLK_M, BLK_N) tile**。`SM90_TMA_LOAD_MULTICAST` 是更进一步的优化——同一份数据 multicast 给 cluster 内多个 CTA,不用各自重新加载。
+`load` 里 `get_slice(cluster_local_block_id)`(Ch4 §4.5)就是 cluster 协作在 TMA 加载时的物理实现:每个 CTA 拿 TMA desc 的不同切片,**整个 cluster 协作加载同一个 (BLK_M, BLK_N) tile**。`SM90_TMA_LOAD_MULTICAST` 是更进一步的优化——同一份数据 multicast 给 cluster 内多个 CTA,不用各自重新加载。
 
 ### 4.6 SharedStorage union
 
@@ -199,7 +199,7 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 #### kernel 编排层的 3 个变体:WarpSpec / Pingpong / Cooperative
 
-注意: Ch4.11 上面那张表里的「变体」(SS/RS/FP8/sparse/grouped)改的是 **mainloop 内部**(数据从哪里来、什么 dtype);这里的 3 个变体改的是 **kernel 编排逻辑**(几个 warp group 一起算一个 CTA 的事)。后者是「**producer / consumer 怎么分工**」,跟 collective mainloop 解耦:
+注意: §4.6 上面那张表里的「变体」(SS/RS/FP8/sparse/grouped)改的是 **mainloop 内部**(数据从哪里来、什么 dtype);这里的 3 个变体改的是 **kernel 编排逻辑**(几个 warp group 一起算一个 CTA 的事)。后者是「**producer / consumer 怎么分工**」,跟 collective mainloop 解耦:
 
 | 变体 | 编排 | 适合 | 文件 |
 |---|---|---|---|
@@ -228,9 +228,9 @@ Ch4 之前引用过两张流水线图(`software-pipeline.png` + `cutlass-threadb
 - `cutlass-threadblock-mma-pipelined.png` 画的是 CUTLASS 2.x Ampere 时代的 `MmaPipelined` 类(`IteratorA / IteratorB` + `ReadableTileIterator` 概念),跟 Ch4 讲的 `CollectiveMma` + TMA + WGMMA + warp specialization 完全不是一个抽象层
 - `software-pipeline.png` 是通用 software-pipeline 图,没画 Hopper 的关键特征——producer/consumer warpgroup 分离、`smem_pipe_write` vs `smem_pipe_read` 的 stage 切换、TMA + mbarrier
 
-CUTLASS 自带图集(`media/images/`)里**没有 Hopper 专属的 mainloop 流水线示意图**。Ch4 §4.4-§4.7 已经把 producer / consumer 各自的 K-loop 拆成 CuTe 计算步骤讲清,**用文字+表格描述比强行塞错时代的图好**。
+CUTLASS 自带图集(`media/images/`)里**没有 Hopper 专属的 mainloop 流水线示意图**。Ch4 §4.4-§4.6 已经把 producer / consumer 各自的 K-loop 拆成 CuTe 计算步骤讲清(**§4.7 只是"本章没有合适的图" callout,本身不含内容**),**用文字+表格描述比强行塞错时代的图好**。
 
-Ch4 把 mainloop 讲完了。下一章 Ch7 看 epilogue——几乎是镜像结构,但**写回**(而不是计算)+**EVT 融合算子**(而不是纯 mma)是主要差异。
+Ch4 把 mainloop 骨架讲完了。下一章 Ch5 看 mainloop 5 个函数逐个拆解(`load_init` / `load` / `mma` / `*_tail`),再下一章 Ch6 看 epilogue——几乎是镜像结构,但**写回**(而不是计算)+**EVT 融合算子**(而不是纯 mma)是主要差异。
 
 ### 4.8 章末:读完这一章你该做得到的事
 
@@ -244,6 +244,6 @@ Ch4 把 mainloop 讲完了。下一章 Ch7 看 epilogue——几乎是镜像结�
 - ✅ 看到 `make_producer_start_state<MainloopPipeline>()` 知道这是为了"首轮 acquire 立刻成功"——必须显式构造,默认 state 不行。
 - ✅ 区分 `PipelineTmaAsync` 的 `producer_commit` 在 TMA 路径是 **NoOp**,在 cp.async 路径才真 arrive barrier。
 - ✅ 看 8 个 `CollectiveMma` 变体(SS/RS/FP8/blockwise/fp8-grp/rs-mixed/2:4-sparse/ds-sparse)能讲出每个变体改的是 **mainloop 内部**还是 **kernel 编排**。
-- ✅ 知道 Ch4 重点不是把 CollectiveMma 整段代码抄下来——重点是 5 个函数每个在 mainloop 轨迹里不同位置上的"做的事"。**Ch7 (DispatchPolicy) 讲 tag 怎么路由到这些变体,Ch9 (Builder) 讲策略怎么选**。
+- ✅ 知道 Ch4 重点不是把 CollectiveMma 整段代码抄下来——重点是 5 个函数每个在 mainloop 轨迹里不同位置上的"做的事"。**Ch8 (DispatchPolicy) 讲 tag 怎么路由到这些变体,Ch9 (Builder) 讲策略怎么选**。
 
 ---

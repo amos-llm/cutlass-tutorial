@@ -92,7 +92,8 @@ Epilogue 的 builder 同构,产出 `CollectiveEpilogue`。
 using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int, int, int>,         // problem shape 动态
     CollectiveMainloop,
-    CollectiveEpilogue
+    CollectiveEpilogue,
+    cutlass::gemm::PersistentScheduler  // TileScheduler_(无默认,见 §1.2;examples/48 走默认)
 >;
 using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 ```
@@ -253,7 +254,7 @@ struct ExampleRunner {
 
 | 开关 | 默认 | 作用 | 改后落到哪一层 |
 |---|---|---|---|
-| `MainloopScheduleType` | `KernelScheduleAuto` | mainloop pipeline 形态(单/双/多 consumer warp group)| 第 3 层 mainloop + Ch7 dispatch |
+| `MainloopScheduleType` | `KernelScheduleAuto` | mainloop pipeline 形态(单/双/多 consumer warp group)| 第 3 层 mainloop + Ch8 dispatch |
 | `EpilogueScheduleType` | `EpilogueScheduleAuto` | epilogue StagesC / StagesD / FragmentSize / ReuseSmemC 等 | 第 4 层 epilogue |
 | `StageCountType` | `StageCountAuto` | mainloop smem pipeline 深度 | 第 3 层 mainloop |
 | `TileSchedulerType` | `PersistentScheduler` | persistent / StreamK / Grouped GEMM 调度 | 第 5 层 scheduler |

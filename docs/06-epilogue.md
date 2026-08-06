@@ -37,7 +37,7 @@ Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(算
 §6.3  TMA Store 路径                              ← register → smem → gmem
 §6.4  EVT 入口:为什么单独成段                    ← 30+ legobrick + 12+ partial spec
 §6.5  三类节点:compute / load / store            ← 节点全表
-§6.6  三个真实 EVT 例子                           ← examples/49 + sm90_callbacks 逐字
+§6.6  三个真实 EVT 例子 + 自定义 activation 讨论  ← examples/49 + sm90_callbacks 逐字
 §6.7  tree 的"求值"过程                          ← producer / consumer 回调
 §6.8  怎么写 EVT(写法 A / B / C)                  ← 手写 vs tag vs 混合
 §6.9  典型 fusion 速查                            ← 12+ tag → Sm90EVT 树
@@ -286,7 +286,7 @@ struct SiLu {
 
 直接用 `ActivationFn = SiLu`(注意:大写 S,大写 L,小写 u,**不是** `Silu`/`silu`/`HomogeneousSilu`)。CUTLASS 故意不内建"全部 activation"——只内建常见数学运算 + 几个常用 activation;其他需要用户写 `template <class> class` 形式的 functor。
 
-**(注意**:`Sm90Compute` 的 ComputeFn 必须是 `template <class> class`(单模板参数),这是 Clang 限制——见 `sm90_visitor_compute_tma_warpspecialized.hpp:60-83` 注释。如果你的 functor 有多个模板参数,可以用一个 1 模板参数的子类继承原类,绕开这个限制,例如 `homogeneous_multiply_add` 就是这么做的(`functional.h:606`)。)**
+**(注意**:`Sm90Compute` 的 ComputeFn 必须是 `template <class> class`(单模板参数),这是 Clang 限制——见 `sm90_visitor_compute_tma_warpspecialized.hpp:60-83` 注释。如果你的 functor 有多个模板参数,可以用一个 1 模板参数的子类继承原类,绕开这个限制,例如 `homogeneous_multiply_add` 就是这么做的(`functional.h:607`,跟 §6.6.1 一致)。)**
 
 ### 6.7 tree 的"求值"过程
 
@@ -399,7 +399,7 @@ using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBui
 
 EVT 节点是 epilogue 的**输入**。builder 看 EVT 类型,落到对应的 partial specialization:
 
-- 默认 epilogue = `Sm90EVT<Sm90Compute<homogeneous_multiply_add, ...>, ScalarBroadcast, AccFetch, ScalarBroadcast, SrcFetch>` —— builder 走默认 epilogue。
+- 默认 epilogue = `Sm90LinearCombination`(`sm90_callbacks_tma_warpspecialized.hpp:182` 的内嵌 `Sm90EVT` 树),结构见 §6.6.1——`Sm90Compute<homogeneous_multiply_add>` 为根,3 个直接 child:`ScalarBroadcast(beta)` / `SrcFetch(C)` / 嵌套的 `Sm90EVT<Sm90Compute<multiplies>, ScalarBroadcast(alpha), AccFetch>` —— builder 走默认 epilogue。
 - 含 EVT 的 epilogue = builder 看你给的 EVT 类型,落到对应的 `CollectiveEpilogue` partial spec(`include/cutlass/epilogue/collective/builders/sm90_builder.inl` 里)。
 
 Ch9 builder 章会讲 builder 怎么 dispatch 到 EVT-aware 的 partial spec。
@@ -432,6 +432,6 @@ Ch9 builder 章会讲 builder 怎么 dispatch 到 EVT-aware 的 partial spec。
 - ✅ 知道 CUTLASS 预置的 activation 包括 `SiLu` / `GELU` / `Sigmoid` / `Tanh` / `ThresholdReLU` / `LeakyReLU` / `ReLu` / `Hardswish`(在 `cutlass/epilogue/thread/activation.h`),`SiLu` 是 `template <typename T> struct SiLu`,**直接用**。
 - ✅ 能区分写法 A(手写 `Sm90EVT<...>`) vs 写法 B(`operations.hpp` 里的 tag 如 `LinearCombination` / `LinCombPerRowBiasEltAct`),知道实际项目新手先用 tag,特殊需求手写。
 - ✅ 看 `examples/113_hopper_gemm_activation_fusion/`(`ActivationFn = SiLu` / `ReLu` / `Identity`)的 epilogue 能讲清 `Sm90Compute<ActivationFn, ...>` 节点。
-- ✅ 知道 builder 怎么按 EVT 类型选 partial spec(细节看 Ch8)。
+- ✅ 知道 builder 怎么按 EVT 类型选 partial spec(细节看 Ch9 §9.3 epilogue builder)。
 
 ---

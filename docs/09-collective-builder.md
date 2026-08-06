@@ -168,7 +168,7 @@ public:
 
 文件:`include/cutlass/epilogue/collective/builders/sm90_builder.inl`。同样结构,主要差异:
 
-- 多接 `(ElementC, LayoutC, AlignmentC, ElementD, LayoutD, AlignmentD, StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, ...)` 等。Caller 在 Ch2.3 看到。
+- 多接 `(ElementC, LayoutC, AlignmentC, ElementD, LayoutD, AlignmentD, StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, ...)` 等。Caller 在 Ch1 §1.3(默认 `EpilogueScheduleAuto`)和 Ch6 §6.1(dispatch policy 5 个参数详解)看到。
 - 内部推 EVT 的根节点(如果用户给 EVT 就用,否则用 `DefaultEpilogue`)。
 
 ### 9.4 "Auto" 实际上到底是什么

@@ -2,7 +2,7 @@
 
 你可能认为 CuTe 是装饰用的工具库。其实不是——它是 CUTLASS **写 mainloop / epilogue 的语言**。mainloop 文件里那一串 `Shape` / `make_tensor` / `make_tiled_mma` 不是装饰,是 mainloop 在描述"我这一 stage 的 smem 上 A 是什么样的、warp 怎么拿自己的 fragment"。
 
-读 Ch4 之前,你需要 CuTe 的"语法熟悉"。这一章不讲 CuTe 怎么写 sgemm(那是 `media/docs/cpp/cute/0x_gemm_tutorial.md` 的事),只讲所有 CUTLASS mainloop **一定会用到**的 4 个核心抽象:`Shape` / `Stride` / `Layout` / `Tensor`,以及 6 个常用组合子:`make_shape` / `make_layout` / `make_tensor` / `composition` / `coalesce` / `tile_to_shape`。
+读 Ch4 之前,你需要 CuTe 的"语法熟悉"。这一章不讲 CuTe 怎么写 sgemm(那是 `media/docs/cpp/cute/0x_gemm_tutorial.md` 的事),只讲所有 CUTLASS mainloop **一定会用到**的 4 个核心抽象:`Shape` / `Stride` / `Layout` / `Tensor`,以及 7 个常用组合子:`make_shape` / `make_stride` / `make_layout` / `make_tensor` / `composition` / `coalesce` / `tile_to_shape`。
 
 读完之后,你应该能在 `sm90_mma_tma_gmma_ss_warpspecialized.hpp` 里把 `SmemLayoutAtomA` / `GmemTiledCopyA` / `TiledMma` 这些名字各自认出来——它们是 `cute::` 类型还是 CollectiveMma 内部的 type alias、各自在 mainloop 里在做什么。
 
@@ -127,7 +127,7 @@ auto rptr = make_rmem_ptr(reg_addr);   // 在 register 上的指针
 
 > **你手写 GEMM 的对照**:你写"threadIdx.x / warpIdx.x 算 smem 偏移"——CUTLASS 里这步就是 `partition_S(thr_mma, smem_layout)`(2.6 略讲),里面靠 `smem_ptr` 的 engine 知道"我现在在 smem,需要走 swizzle"。
 
-### 2.3 6 个核心组合子
+### 2.3 7 个核心组合子
 
 #### `make_shape` / `make_stride` / `make_layout`
 
@@ -232,7 +232,7 @@ GmemTiledCopyB   SmemLayoutAtomB   SmemCopyAtomB   TransformB
 - 主 mainloop 真正的 smem 写入者是 `GmemTiledCopy` + `SmemLayoutAtom`:**TMA load 按 `GmemTiledCopy` 的指令,把数据写进 `SmemLayoutAtom` 描述的 smem 位置**。`SmemCopyAtom` 在 sm90 上是空,因为 Hopper 直接走 TMA,不需要 smem 内部再 cp。
 - `TransformA/B` 是可选的 layout 变换(identity / interleave / swizzle),严格说不是 atom,但放在同一组模板参数里。
 
-Ch4 的 `CollectiveMma<...>` 模板参数恰好是这 8 个;Ch8 的 builder 推导会一个个把它们算出来。
+Ch4 的 `CollectiveMma<...>` 模板参数恰好是这 8 个;Ch9 的 builder 推导会一个个把它们算出来。
 
 #### 三层 shape 嵌套:AtomLayout / TileShape / ClusterShape
 

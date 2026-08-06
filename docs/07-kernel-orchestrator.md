@@ -219,7 +219,7 @@ if (role == Producer) {
 
 // Consumer 主循环
 if (role == Consumer) {
-  CUTLASS_PRAGMA_UNROLL  // Consumer 是同步执行 WGMMA,可以 unroll
+  CUTLASS_PRAGMA_NO_UNROLL  // Consumer K-loop 跟 Producer 一样不能 unroll(K_tiles 运行时决定),见 Ch5 §5.2.7
   for (int k_tile = 0; k_tile < K_tiles; ++k_tile) {
     // 等本 consumer 的 smem slot 准备好
     mainloop_pipeline.consumer_wait(read_state);
@@ -505,7 +505,7 @@ Group 是**唯一一个有真 smem pipeline** 的 Sm90 调度器:
 
 ```cpp
 using Pipeline = PipelineAsync<SchedulerPipelineStageCount>;  // 默认 2 stage
-using SharedStorage {
+struct SharedStorage {
   PipelineStorage pipeline_;
   SchedulerResponse data_[SchedulerPipelineStageCount];  // smem response buffer
 };
@@ -540,7 +540,7 @@ class PersistentTileSchedulerSm100 {
   struct CLCResponse { uint32_t data[4] = {0}; };   // 16B,装 1 个 (x, y, z, valid) tuple
 
   using Pipeline = PipelineCLCFetchAsync<Stages, ClusterShape>;  // smem pipeline
-  using SharedStorage {
+  struct SharedStorage {
     PipelineStorage pipeline_;
     CLCResponse data_[Stages];   // smem buffer for CLC responses
   };

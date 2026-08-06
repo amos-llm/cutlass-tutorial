@@ -20,7 +20,7 @@
 - [第 1 章:Overview——examples/48 + 5 层架构图 + `*Type` 开关预览](docs/01-overview.md)
 - [第 2 章:CuTe 实战](docs/02-cute.md)
 - [第 3 章:smem pipeline 与 barrier 抽象](docs/03-smem-pipeline.md)
-- [第 4 章:CollectiveMainloop 概览(类头 + 类型别名 + 三阶段 + 契约)](docs/04-mainloop.md)
+- [第 4 章:CollectiveMainloop 概览(类头 + 类型别名 + 三阶段 + 契约 + Cluster)](docs/04-mainloop.md)
 - [第 5 章:CollectiveMainloop 逐方法(load_init / load / mma / *_tail)](docs/05-mainloop-methods.md)
 - [第 6 章:CollectiveEpilogue & EVT——融合算子 DSL](docs/06-epilogue.md)
 - [第 7 章:Kernel orchestrator + TileScheduler(调度器族对比)](docs/07-kernel-orchestrator.md)

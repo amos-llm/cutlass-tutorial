@@ -165,9 +165,9 @@ Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA
 
 - `make_smem_ptr(ptr)` 包一个普通指针成「我知道我在 smem」的 smart pointer——后续按 `SmemLayoutA` 算 swizzle / bank conflict 时,这个 tag 会被识别
 - `make_tensor(ptr, layout)` 把指针 + layout 合成 `cute::Tensor`(Ch2.2 讲过)
-- **`SmemLayoutA` 来自 builder 推导**(Ch9 §9.1 步骤 4),形状 `(BLK_M, BLK_K, Stages)`,stride 已经把 swizzle 编进去了
+- **`SmemLayoutA` 来自 builder 推导**(Ch9 §9.2 步骤 4),形状 `(BLK_M, BLK_K, Stages)`,stride 已经把 swizzle 编进去了
 
-`SharedStorage` 是 `union { MainloopTensorStorage; EpilogueTensorStorage; }`(Ch4.10 详讲),producer / consumer 共享同一块 smem,**靠 union 复用**——mainloop 阶段只用到 `TensorStorage`,epilogue 阶段才能用 epilogue 的 smem layout。
+`SharedStorage` 是 `union { MainloopTensorStorage; EpilogueTensorStorage; }`(Ch4 §4.6 详讲),producer / consumer 共享同一块 smem,**靠 union 复用**——mainloop 阶段只用到 `TensorStorage`,epilogue 阶段才能用 epilogue 的 smem layout。
 
 #### 5.2.2 ② `get_slice(cluster_local_block_id)` — cluster 内 CTA 分摊
 
@@ -182,7 +182,7 @@ auto block_tma_b = mainloop_params.tma_load_b.get_slice(cluster_local_block_id.x
 
 `get_slice` 把 TMA atom 按 cluster 内的 CTA 切一份:**每个 CTA 看到 TMA desc 的不同切片**。A 沿 N 方向分(`cluster_local_block_id.y`),B 沿 M 方向分(`.x`),这样 cluster 内 8 个 CTA(典型 `<_4,_2,_1>`)能把同一个 `(BLK_M, BLK_N)` tile 拆 8 份加载,**总带宽 × 8**。
 
-> 这是 Ch4.10 cluster 协作的物理实现:TMA 本身不会自动 multicast,得 builder / kernel 显式算「我这个 CTA 写哪一片」,再用 `get_slice` 取出来。
+> 这是 Ch4 §4.5 cluster 协作的物理实现:TMA 本身不会自动 multicast,得 builder / kernel 显式算「我这个 CTA 写哪一片」,再用 `get_slice` 取出来。
 
 #### 5.2.3 ③ `partition_S / partition_D` — gmem / smem 摊分到 TMA thread
 
@@ -505,6 +505,6 @@ mma_tail(MainloopPipeline pipeline, PipelineState smem_pipe_release, int k_tile_
 - ✅ 看到 `make_producer_start_state<MainloopPipeline>()` 知道这是为了"首轮 acquire 立刻成功"——必须显式构造,默认 state 不行。
 - ✅ 区分 `PipelineTmaAsync` 的 `producer_commit` 在 TMA 路径是 **NoOp**,在 cp.async 路径才真 arrive barrier。
 - ✅ 看 8 个 `CollectiveMma` 变体(SS/RS/FP8/blockwise/fp8-grp/rs-mixed/2:4-sparse/ds-sparse)能讲出每个变体改的是 **mainloop 内部**还是 **kernel 编排**。
-- ✅ 知道本章重点不是把 CollectiveMma 整段代码抄下来——重点是 5 个函数每个在 mainloop 轨迹里不同位置上的"做的事"。**Ch7 (DispatchPolicy) 讲 tag 怎么路由到这些变体,Ch9 (Builder) 讲策略怎么选**。
+- ✅ 知道本章重点不是把 CollectiveMma 整段代码抄下来——重点是 5 个函数每个在 mainloop 轨迹里不同位置上的"做的事"。**Ch8 (DispatchPolicy) 讲 tag 怎么路由到这些变体,Ch9 (Builder) 讲策略怎么选**。
 
 ---
