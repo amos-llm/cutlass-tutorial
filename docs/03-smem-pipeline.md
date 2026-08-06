@@ -1,8 +1,8 @@
-## 第 4 章:smem pipeline 与 barrier 抽象
+## 第 3 章:smem pipeline 与 barrier 抽象
 
 这一章是 CUTLASS 3.x **真正的"概念孵化器"**——mainloop / epilogue / kernel orchestrator / scheduler 都依赖这一套 `PipelineTmaAsync` / `PipelineAsync` / `PipelineTmaStore` 抽象,但它**没有任何一个章节真正把它当主语讲过**。
 
-读完 Ch5,你会明白为什么 `producer_acquire` / `consumer_wait` 是必须的、为什么 `PipelineState` 要分 producer 和 consumer 两份、`Stages` 是什么、为什么 TMA 路径上 `producer_commit` 是 NoOp、cluster barrier 怎么跟 single-CTA barrier 区分。
+读完 Ch4,你会明白为什么 `producer_acquire` / `consumer_wait` 是必须的、为什么 `PipelineState` 要分 producer 和 consumer 两份、`Stages` 是什么、为什么 TMA 路径上 `producer_commit` 是 NoOp、cluster barrier 怎么跟 single-CTA barrier 区分。
 
 主文件:`include/cutlass/pipeline/sm90_pipeline.hpp` + `pipeline.hpp`(`PipelineAsync` 与 `PipelineTmaStore`)。
 
@@ -39,7 +39,7 @@ CUTLASS 用 **mbarrier**(NVIDIA 的 hardware barrier,Hopper+ 引入)实现这套
 | `PipelineTmaStore<Stages>` | `sm90_pipeline.hpp:655` | **epilogue 的 register → smem → gmem**(TMA store) | register → smem(producer)、smem → gmem(TMA)|
 | `PipelineAsync<Stages>` | `sm90_pipeline.hpp:1015` | **不用 TMA 的 smem 路径**(cp.async,sm80 旧式)| gmem → smem(cp.async producer)、smem → register(consumer)|
 | `PipelineTransactionAsync<Stages>` | `sm90_pipeline.hpp:766` | 多生产者协同时的 transactional 路径(避免同一 stage 被多个 producer 抢)| 同 PipelineAsync,但带 transaction semantics |
-| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `sm100_tile_scheduler.hpp` | **Sm100 调度器的 CLC pipeline**(Ch11 Sm100 节)| 调度器专用 |
+| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `sm100_tile_scheduler.hpp` | **Sm100 调度器的 CLC pipeline**(Ch9 Sm100 节)| 调度器专用 |
 
 注意 Hopper 上**默认 mainloop 走 `PipelineTmaAsync`**——TMA 的 `arrive_and_expect_tx` 由 producer 发起,`complete_transaction` 由硬件在 TMA 写完时自动调用,**producer 那边不需要显式 `commit`**。这跟 Ampere 时代的 cp.async 路径不一样。
 
@@ -69,7 +69,7 @@ void producer_commit(PipelineState state, uint32_t bytes) {
 }
 ```
 
-为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch6 mainloop §5.4 会强调)。
+为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch5 mainloop §5.4 会强调)。
 
 #### Consumer 侧
 
@@ -112,7 +112,7 @@ struct PipelineState {
 每个 pipeline 实例用**两份 `PipelineState`**——一份 producer 的,一份 consumer 的,初始相位**反相**:
 
 ```cpp
-// Ch6 mainloop §5.3 producer/consumer 主循环的真实代码:
+// Ch5 mainloop §5.3 producer/consumer 主循环的真实代码:
 
 // Producer 起点 state
 PipelineState write_state = make_producer_start_state<MainloopPipeline>();
@@ -133,7 +133,7 @@ barrier 的 phase 翻转跟 state 同步——smem stage 上"哪个 phase 算空
 
 ### 4.5 6 个 helper 在 K-loop 里的精确顺序
 
-Ch6 / Ch8 会反复用到这一套,这里把骨架抽出来单独讲:
+Ch5 / Ch7 会反复用到这一套,这里把骨架抽出来单独讲:
 
 ```cpp
 // 起点
@@ -209,20 +209,20 @@ mainloop 实际用时,builder 会算:
 
 `include/cutlass/pipeline/sm100_pipeline.hpp` 跟 sm90 同构,但 cluster barrier 升级为 **distributed shared memory barrier**(Blackwell 引入)。具体变化:
 
-- `clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128` PTX 指令(Ch11 Sm100 节会详讲 CLC)
+- `clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128` PTX 指令(Ch9 Sm100 节会详讲 CLC)
 - Distributed shared memory 允许 CTA 直接读其他 CTA 的 smem,**不需要走 gmem**
 
 API 形态跟 sm90 一样,6 个 helper 一一对应,用法不变。
 
 ### 4.9 章末:读完这一章你该做得到的事
 
-- ✅ 在 Ch6 mainloop / Ch8 epilogue / Ch11 kernel orchestrator 看到 `producer_acquire` / `consumer_wait` 时,知道每个 helper 在改哪个 barrier。
+- ✅ 在 Ch5 mainloop / Ch7 epilogue / Ch9 kernel orchestrator 看到 `producer_acquire` / `consumer_wait` 时,知道每个 helper 在改哪个 barrier。
 - ✅ 明白 `PipelineState` 的 phase 翻转跟 barrier 的 phase 翻转同步;producer / consumer 两份 state 起点反相的意义。
 - ✅ 能解释"TMA 路径上 `producer_commit` 为什么是 NoOp"。
 - ✅ 看懂 `PipelineTmaAsync<Stages>` 的 Stages 参数怎么影响 smem 用量。
 - ✅ 区分 `ClusterBarrier` / `NamedBarrier` / 普通 `mbarrier` 三类 barrier 的可见性范围。
 - ✅ 知道 sm90 / sm100 pipeline 的对应关系。
 
-下一章 Ch6 看 mainloop——`CollectiveMma` 怎么用这一套 pipeline 把 TMA + WGMMA + producer/consumer 编排成一个 K-loop。
+下一章 Ch5 看 mainloop——`CollectiveMma` 怎么用这一套 pipeline 把 TMA + WGMMA + producer/consumer 编排成一个 K-loop。
 
 ---

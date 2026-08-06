@@ -1,4 +1,4 @@
-## 第 6 章:深入 CollectiveEpilogue
+## 第 5 章:深入 CollectiveEpilogue
 
 Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(算子)→smem(D 缓存)→gmem(TMA store D)、同用 pipeline、同 swizzle、同 swappable 接口。区别只在:
 
@@ -36,7 +36,7 @@ struct Sm90TmaWarpSpecialized
 |`ReuseSmemC`|true iff `sizeof(C)==sizeof(D) && sizeof(D)>8`|是否把"已加载 C 的 smem slot"在 epilogue 末尾继续复用(给 output D 用)|
 |`DelayTmaStore`|true iff `C==void && !ptr-array schedule`|是否把 TMA store 推迟到最后(为 swizzle / fusion 留时间)|
 
-`EpilogueScheduleAuto` builder 缺省是哪个具体 `StagesC` / `StagesD` / `FragmentSize` / `ReuseSmemC` / `DelayTmaStore` 组合,看 `include/cutlass/epilogue/collective/builders/sm90_builder.inl`(Ch11 讨论)。
+`EpilogueScheduleAuto` builder 缺省是哪个具体 `StagesC` / `StagesD` / `FragmentSize` / `ReuseSmemC` / `DelayTmaStore` 组合,看 `include/cutlass/epilogue/collective/builders/sm90_builder.inl`(Ch9 讨论)。
 
 ### 6.2 默认 epilogue:`D = alpha * (A*B) + beta * C`
 
@@ -193,7 +193,7 @@ struct HomogeneousSilu {
 |Example|在 epilogue 上加了什么|在哪|
 |---|---|---|
 |`examples/48_hopper_warp_specialized_gemm/`|默认|一切从零|
-|`examples/49_hopper_gemm_with_collective_builder/`|加 EVT bias + ReLU fusion + 改 schedule|Ch12|
+|`examples/49_hopper_gemm_with_collective_builder/`|加 EVT bias + ReLU fusion + 改 schedule|Ch1|
 |`examples/50_hopper_gemm_with_epilogue_swizzle/`|swizzle output(让 D 的 gmem 写入布局更好)|`examples/50_*/50_*.cu`|
 |`examples/113_hopper_gemm_activation_fusion/`|多 activation fusion(bias + gelu + scale)|`examples/113_*/113_*.cu`|
 

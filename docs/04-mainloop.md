@@ -1,4 +1,4 @@
-## 第 5 章:深入 CollectiveMainloop(本教程核心价值)
+## 第 4 章:深入 CollectiveMainloop(本教程核心价值)
 
 如果本教程只选一章细读,选这一章。Mainloop 是 CUTLASS 3.x 写得最繁的部分——也是体现"5 层抽象是否值钱"的地方。
 
@@ -54,7 +54,7 @@ struct CollectiveMma<
 ```cpp
 // 在 collective_mma 内部的类型,按"出现频率"排:
 
-using DispatchPolicy = MainloopSm90TmaGmmaWarpSpecialized;  // tag (Ch9)
+using DispatchPolicy = MainloopSm90TmaGmmaWarpSpecialized;  // tag (Ch8)
 using TileShape      = TileShape_;
 using ElementA       = ElementA_;
 using StrideA        = StrideA_;
@@ -107,7 +107,7 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
   load_init → while (k < K) { consumer_wait(state); mma(state); state++; } → mma_tail
 ```
 
-下面 4 节按 `load_init → load → mma → *_tail` 顺序,**逐行讲里面每个 CuTe 计算在做什么**。读完这 4 节,Ch5 真正讲的是什么就清楚了。
+下面 4 节按 `load_init → load → mma → *_tail` 顺序,**逐行讲里面每个 CuTe 计算在做什么**。读完这 4 节,Ch4 真正讲的是什么就清楚了。
 
 ### 5.4 `load_init`:CuTe gmem 视图的构造
 
@@ -167,7 +167,7 @@ Mode index:  0      1      2
 
 #### 4.4.3 返回的 `tuple<gA_mkl, gB_nkl>` 是 collective / kernel 之间的契约
 
-`load_init` 函数体末尾的注释明确:**"first two elements must be gA_mkl and gB_nkl"**。这是 **kernel 层能依赖的契约**——kernel orchestrator(Ch8)只知道这俩名字,具体 layout 怎么切由 collective 推。**契约的好处**:换 collective 实现(比如从 SS 换 RS,或 sm90 换 sm100),kernel 代码不动。
+`load_init` 函数体末尾的注释明确:**"first two elements must be gA_mkl and gB_nkl"**。这是 **kernel 层能依赖的契约**——kernel orchestrator(Ch7)只知道这俩名字,具体 layout 怎么切由 collective 推。**契约的好处**:换 collective 实现(比如从 SS 换 RS,或 sm90 换 sm100),kernel 代码不动。
 
 ### 5.5 `load`:producer 的 CuTe 流程
 
@@ -246,10 +246,10 @@ Tensor sA = make_tensor(make_smem_ptr(shared_tensors.smem_A.data()), SmemLayoutA
 ```
 
 - `make_smem_ptr(ptr)` 包一个普通指针成「我知道我在 smem」的 smart pointer——后续按 `SmemLayoutA` 算 swizzle / bank conflict 时,这个 tag 会被识别
-- `make_tensor(ptr, layout)` 把指针 + layout 合成 `cute::Tensor`(Ch3.2 讲过)
-- **`SmemLayoutA` 来自 builder 推导**(Ch11 §8.1 步骤 4),形状 `(BLK_M, BLK_K, Stages)`,stride 已经把 swizzle 编进去了
+- `make_tensor(ptr, layout)` 把指针 + layout 合成 `cute::Tensor`(Ch2.2 讲过)
+- **`SmemLayoutA` 来自 builder 推导**(Ch9 §8.1 步骤 4),形状 `(BLK_M, BLK_K, Stages)`,stride 已经把 swizzle 编进去了
 
-`SharedStorage` 是 `union { MainloopTensorStorage; EpilogueTensorStorage; }`(Ch5.10 详讲),producer / consumer 共享同一块 smem,**靠 union 复用**——mainloop 阶段只用到 `TensorStorage`,epilogue 阶段才能用 epilogue 的 smem layout。
+`SharedStorage` 是 `union { MainloopTensorStorage; EpilogueTensorStorage; }`(Ch4.10 详讲),producer / consumer 共享同一块 smem,**靠 union 复用**——mainloop 阶段只用到 `TensorStorage`,epilogue 阶段才能用 epilogue 的 smem layout。
 
 #### 4.5.2 ② `get_slice(cluster_local_block_id)` — cluster 内 CTA 分摊
 
@@ -264,7 +264,7 @@ auto block_tma_b = mainloop_params.tma_load_b.get_slice(cluster_local_block_id.x
 
 `get_slice` 把 TMA atom 按 cluster 内的 CTA 切一份:**每个 CTA 看到 TMA desc 的不同切片**。A 沿 N 方向分(`cluster_local_block_id.y`),B 沿 M 方向分(`.x`),这样 cluster 内 8 个 CTA(典型 `<_4,_2,_1>`)能把同一个 `(BLK_M, BLK_N)` tile 拆 8 份加载,**总带宽 × 8**。
 
-> 这是 Ch5.9 cluster 协作的物理实现:TMA 本身不会自动 multicast,得 builder / kernel 显式算「我这个 CTA 写哪一片」,再用 `get_slice` 取出来。
+> 这是 Ch4.9 cluster 协作的物理实现:TMA 本身不会自动 multicast,得 builder / kernel 显式算「我这个 CTA 写哪一片」,再用 `get_slice` 取出来。
 
 #### 4.5.3 ③ `partition_S / partition_D` — gmem / smem 摊分到 TMA thread
 
@@ -291,7 +291,7 @@ TMA 的发起方其实是 **single thread**(warp 0 lane 0),但它操作的是一
 
 #### 4.5.6 关键:`producer_commit` 在 `load` 里**不存在**
 
-注意上面 6 步**没有 `producer_commit`**——因为 TMA 自身的完成事件会自动 arrive barrier(`PipelineTmaAsync` 的 `producer_commit` 在 TMA 路径是 NoOp,见 Ch5.8 4-方法语义框)。如果手写 GEMM 移植过 cp.async 路径,会习惯性地在 `load` 末尾加 `producer_commit`,**Hopper TMA 路径上这一行冗余**,可省。
+注意上面 6 步**没有 `producer_commit`**——因为 TMA 自身的完成事件会自动 arrive barrier(`PipelineTmaAsync` 的 `producer_commit` 在 TMA 路径是 NoOp,见 Ch4.8 4-方法语义框)。如果手写 GEMM 移植过 cp.async 路径,会习惯性地在 `load` 末尾加 `producer_commit`,**Hopper TMA 路径上这一行冗余**,可省。
 
 #### 4.5.7 `CUTLASS_PRAGMA_NO_UNROLL` —— 不能 unroll 的关键
 
@@ -299,7 +299,7 @@ K-loop 的循环次数 `k_tile_count` 是**运行时**(K / Stages_t大小),不�
 
 ### 5.6 `mma`:consumer 的 CuTe 流程
 
-源码对应段:**`mma`** 函数体,**全部 consumer warpgroup 线程都执行**(不只是单线程)。这是 Ch5 最长、最重要的函数。
+源码对应段:**`mma`** 函数体,**全部 consumer warpgroup 线程都执行**(不只是单线程)。这是 Ch4 最长、最重要的函数。
 
 ```cpp
 template <class FrgTensorC>
@@ -331,7 +331,7 @@ mma(MainloopPipeline pipeline,
   Tensor tCrA = thread_mma.make_fragment_A(tCsA);                        // (MMA, MMA_M, MMA_K, PIPE)
   Tensor tCrB = thread_mma.make_fragment_B(tCsB);                        // (MMA, MMA_N, MMA_K, PIPE)
 
-  static_assert(... /* shape 校验, 见 Ch5.6.5 */);
+  static_assert(... /* shape 校验, 见 Ch4.6.5 */);
 
   // ⑤ prologue:第一次 mma,accumulate_ = Zero(从 0 开始)
   PipelineState smem_pipe_release = smem_pipe_read;
@@ -490,17 +490,17 @@ WGMMA 是**异步**——`cute::gemm` 调完不代表算完,GPU 还在内部流�
 
 #### 4.6.8 `cute::gemm(tiled_mma, tCrA, tCrB, accum)` —— 这一行做了什么
 
-Ch3.5 讲过 5-case dispatch。这里具体说:
+Ch2.5 讲过 5-case dispatch。这里具体说:
 
 ```cpp
 cute::gemm(tiled_mma, tCrA(_,_,k_block,read_stage), tCrB(_,_,k_block,read_stage), accum)
 ```
 
-- 第 1 参数 `tiled_mma` = `TiledMma`(Ch3.4 讲的 atom + AtomLayout 的组合)
+- 第 1 参数 `tiled_mma` = `TiledMma`(Ch2.4 讲的 atom + AtomLayout 的组合)
 - 第 2/3 参数是 4D fragment 的「K 维 sub-block 投影 + smem stage 投影」——`tCrA(_,_,k_block,read_stage)` 取出当前 stage 的当前 k_block 子片
 - 第 4 参数 `accum` 是 rmem 累加器
 
-`cute::gemm` 走 Ch3.5 的 5-case dispatch:**根据 `tiled_mma.accumulate_` 决定 scale-out(Zero/One);根据 atom 类型(m64n16k16)推到 PTX 字符串;根据 thread layout 决定哪些 lane 实际参与本次 mma**。最终生成的指令:
+`cute::gemm` 走 Ch2.5 的 5-case dispatch:**根据 `tiled_mma.accumulate_` 决定 scale-out(Zero/One);根据 atom 类型(m64n16k16)推到 PTX 字符串;根据 thread layout 决定哪些 lane 实际参与本次 mma**。最终生成的指令:
 
 ```text
 wgmma.mma_async.sync.aligned.m64n16k16.f32.f16.f16.f32
@@ -513,7 +513,7 @@ wgmma.mma_async.sync.aligned.m64n16k16.f32.f16.f16.f32
 
 #### 4.6.9 `accum` 的生命周期
 
-`accum` 是 kernel 层(Ch8)传进来的 rmem tensor,大小 `(M, N) = (BLK_M, BLK_N)`(因为每个 consumer warpgroup 算整个 tile 的 M、N 维,K 维在 K-loop 里累加)。**调用前是 garbage**——所以 prologue 必须 `Zero` scale-out,第一次 mma 才不会累加垃圾。
+`accum` 是 kernel 层(Ch7)传进来的 rmem tensor,大小 `(M, N) = (BLK_M, BLK_N)`(因为每个 consumer warpgroup 算整个 tile 的 M、N 维,K 维在 K-loop 里累加)。**调用前是 garbage**——所以 prologue 必须 `Zero` scale-out,第一次 mma 才不会累加垃圾。
 
 > **你手写 GEMM 的对照**:你写一个 `float acc[BLOCK_M][BLOCK_N] = {0}` 或 `__shared__` accumulator。这里 `accum` 是 rmem 视图,prologue `Zero` 起到「等价清零」的作用。
 
@@ -553,11 +553,11 @@ mma_tail(MainloopPipeline pipeline, PipelineState smem_pipe_release, int k_tile_
 }
 ```
 
-`warpgroup_wait<0>()` —— 等**所有** outstanding mma batch 完成。K-loop 里 `warpgroup_wait<K_PIPE_MMAS>()` 只等 1 个;**`mma_tail` 里 wait<0> 是等全部**。**只有 `accum` 全部 retire,epilogue 才能安全读它**(Ch6 epilogue 第一节)。
+`warpgroup_wait<0>()` —— 等**所有** outstanding mma batch 完成。K-loop 里 `warpgroup_wait<K_PIPE_MMAS>()` 只等 1 个;**`mma_tail` 里 wait<0> 是等全部**。**只有 `accum` 全部 retire,epilogue 才能安全读它**(Ch5 epilogue 第一节)。
 
 `smem_pipe_release.advance(k_tile_count)` —— 把 `smem_pipe_release` state 推到对应 stage。K-loop 已经 `++smem_pipe_release` 推进过 mainloop 部分,这里再 `advance(k_tile_count)` 把 prologue 剩余 + mainloop 剩余的 stage 全部 cover 到。
 
-### 5.8 Pipeline 4 方法语义:Ch5 必须先校准的 4 个词
+### 5.8 Pipeline 4 方法语义:Ch4 必须先校准的 4 个词
 
 `PipelineTmaAsync<N>` 的 4 个方法每个有明确的「阻塞 / 非阻塞 / 可能在某些条件下退化」语义,写 mainloop 时不能搞混:
 
@@ -571,7 +571,7 @@ mma_tail(MainloopPipeline pipeline, PipelineState smem_pipe_release, int k_tile_
 两个「会被吞掉」的关键细节,手写时容易踩:
 
 1. **`producer_commit` 在 TMA 场景下是 NoOp**——因为 TMA 自身完成时会自动 arrive barrier 并 arrive bytes,所以你再调一次 `producer_commit` 是冗余的(但无害)。`PipelineTmaAsync` 故意保留了 API 形式一致;真正的 producer-commit 语义由 TMA 完成事件承担。
-2. **`make_producer_start_state<MainloopPipeline>()` 不是装饰**——pipeline 在起点「空」的时候,producer 的第一次 `acquire` 会直接成功;但你必须显式构造「让首轮 acquire 成功」的 state,而不是用默认构造的 state。这是 `smem_pipe_write = make_producer_start_state<MainloopPipeline>()` 在 Ch8 主循环出现的原因。
+2. **`make_producer_start_state<MainloopPipeline>()` 不是装饰**——pipeline 在起点「空」的时候,producer 的第一次 `acquire` 会直接成功;但你必须显式构造「让首轮 acquire 成功」的 state,而不是用默认构造的 state。这是 `smem_pipe_write = make_producer_start_state<MainloopPipeline>()` 在 Ch7 主循环出现的原因。
 
 > 一句话总结:**acquire / wait 是「等我需要的东西就绪」,commit / release 是「通知对方我这边就绪/用完」。** 两个阻塞方法(acquire、wait)是真正让线程「停下来等」的同步点;两个非阻塞方法只是更新 barrier 状态、不卡线程。
 
@@ -613,13 +613,13 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 > 你写 Hopper 时如果用过 cluster launch(`cudaLaunchKernelEx` + `clusterDim`),这里对应。CTA 间 DSMEM 互访省 smem 注册流量——尤其在大 BlockM × BlockN 的 tile 上。
 
-`load` 里 `get_slice(cluster_local_block_id)`(Ch5.5.2)就是 cluster 协作在 TMA 加载时的物理实现:每个 CTA 拿 TMA desc 的不同切片,**整个 cluster 协作加载同一个 (BLK_M, BLK_N) tile**。`SM90_TMA_LOAD_MULTICAST` 是更进一步的优化——同一份数据 multicast 给 cluster 内多个 CTA,不用各自重新加载。
+`load` 里 `get_slice(cluster_local_block_id)`(Ch4.5.2)就是 cluster 协作在 TMA 加载时的物理实现:每个 CTA 拿 TMA desc 的不同切片,**整个 cluster 协作加载同一个 (BLK_M, BLK_N) tile**。`SM90_TMA_LOAD_MULTICAST` 是更进一步的优化——同一份数据 multicast 给 cluster 内多个 CTA,不用各自重新加载。
 
 ### 5.11 SharedStorage union
 
 回到 Ch2.6。Mainloop 用完 smem 之后,这块交给 epilogue 复用——`union { MainloopTensorStorage; EpilogueTensorStorage; }`。
 
-变体速览:同一 `sm90_mma_tma_gmma_*` 文件名下还有这些变体,都靠 dispatch policy tag 路由(Ch9):
+变体速览:同一 `sm90_mma_tma_gmma_*` 文件名下还有这些变体,都靠 dispatch policy tag 路由(Ch8):
 
 |文件|变体|
 |---|---|
@@ -639,7 +639,7 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 #### kernel 编排层的 3 个变体:WarpSpec / Pingpong / Cooperative
 
-注意: Ch5.11 上面那张表里的「变体」(SS/RS/FP8/sparse/grouped)改的是 **mainloop 内部**(数据从哪里来、什么 dtype);这里的 3 个变体改的是 **kernel 编排逻辑**(几个 warp group 一起算一个 CTA 的事)。后者是「**producer / consumer 怎么分工**」,跟 collective mainloop 解耦:
+注意: Ch4.11 上面那张表里的「变体」(SS/RS/FP8/sparse/grouped)改的是 **mainloop 内部**(数据从哪里来、什么 dtype);这里的 3 个变体改的是 **kernel 编排逻辑**(几个 warp group 一起算一个 CTA 的事)。后者是「**producer / consumer 怎么分工**」,跟 collective mainloop 解耦:
 
 | 变体 | 编排 | 适合 | 文件 |
 |---|---|---|---|
@@ -653,23 +653,23 @@ auto neighbor_smem_A = cluster_collective_load(...);
 - **Pingpong**: 2 个 consumer **交替**——一个跑 K-step 0、另一个跑 K-step 1,软硬流水线叠加。每个 consumer 算**整个** tile,所以 K-loop 总吞吐 = 2 × 单 consumer 带宽。代价:smem pipeline 要 **double buffer**(stage 数 × 2)、smem 压力大。适合中等 tile 想再压一压。
 - **Cooperative**: N 个 consumer **协同**算一个 tile,每个 consumer 只算 tile 的 **1/N**(比如 4 个 consumer 每人算 128×32)。tile 整体很大时,这种切分让每个 consumer 的 smem footprint 变小,可以塞更多 stage;同时 K-loop 总吞吐 = N × 单 consumer 带宽。代价:consumer 之间需要协调(谁负责哪个子区域),dispatch policy 里要算清楚 fragment 切分。
 
-**怎么选?** 经验启发式(具体见 Ch11 的 `media/docs/cpp/heuristics.md` + `python/cutlass_library/heuristics.py`):
+**怎么选?** 经验启发式(具体见 Ch9 的 `media/docs/cpp/heuristics.md` + `python/cutlass_library/heuristics.py`):
 
 - BM × BN ≤ 128 × 128:WarpSpec 够用,smem 压力最小。
 - 128 × 128 ~ 256 × 128:Pingpong 收益明显。
 - ≥ 256 × 256:Cooperative 才喂得满。
 
-`KernelScheduleAuto` 就是按这条启发式选;用户写 `KernelTmaWarpSpecialized` / `_Pingpong` / `_Cooperative` 之一就是显式覆盖。**这些 tag 之间没有 C++ 继承关系**(Ch9)——是同辈空 struct,builder 用 `is_same_v` 硬枚举路由。
+`KernelScheduleAuto` 就是按这条启发式选;用户写 `KernelTmaWarpSpecialized` / `_Pingpong` / `_Cooperative` 之一就是显式覆盖。**这些 tag 之间没有 C++ 继承关系**(Ch8)——是同辈空 struct,builder 用 `is_same_v` 硬枚举路由。
 
 ### 5.12 本章没有合适的图
 
-Ch5 之前引用过两张流水线图(`software-pipeline.png` + `cutlass-threadblock-mma-pipelined.png`),但**两张都不对**:
+Ch4 之前引用过两张流水线图(`software-pipeline.png` + `cutlass-threadblock-mma-pipelined.png`),但**两张都不对**:
 
-- `cutlass-threadblock-mma-pipelined.png` 画的是 CUTLASS 2.x Ampere 时代的 `MmaPipelined` 类(`IteratorA / IteratorB` + `ReadableTileIterator` 概念),跟 Ch5 讲的 `CollectiveMma` + TMA + WGMMA + warp specialization 完全不是一个抽象层
+- `cutlass-threadblock-mma-pipelined.png` 画的是 CUTLASS 2.x Ampere 时代的 `MmaPipelined` 类(`IteratorA / IteratorB` + `ReadableTileIterator` 概念),跟 Ch4 讲的 `CollectiveMma` + TMA + WGMMA + warp specialization 完全不是一个抽象层
 - `software-pipeline.png` 是通用 software-pipeline 图,没画 Hopper 的关键特征——producer/consumer warpgroup 分离、`smem_pipe_write` vs `smem_pipe_read` 的 stage 切换、TMA + mbarrier
 
-CUTLASS 自带图集(`media/images/`)里**没有 Hopper 专属的 mainloop 流水线示意图**。Ch5 §4.4-§4.7 已经把 producer / consumer 各自的 K-loop 拆成 CuTe 计算步骤讲清,**用文字+表格描述比强行塞错时代的图好**。
+CUTLASS 自带图集(`media/images/`)里**没有 Hopper 专属的 mainloop 流水线示意图**。Ch4 §4.4-§4.7 已经把 producer / consumer 各自的 K-loop 拆成 CuTe 计算步骤讲清,**用文字+表格描述比强行塞错时代的图好**。
 
-Ch5 把 mainloop 讲完了。下一章 Ch6 看 epilogue——几乎是镜像结构,但**写回**(而不是计算)+**EVT 融合算子**(而不是纯 mma)是主要差异。
+Ch4 把 mainloop 讲完了。下一章 Ch5 看 epilogue——几乎是镜像结构,但**写回**(而不是计算)+**EVT 融合算子**(而不是纯 mma)是主要差异。
 
 ---

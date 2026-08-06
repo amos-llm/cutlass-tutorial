@@ -1,6 +1,6 @@
-## 第 7 章:Epilogue Visitor Tree(EVT)——融合算子 DSL
+## 第 6 章:Epilogue Visitor Tree(EVT)——融合算子 DSL
 
-这一章从 Ch8 epilogue 中拆出来单独讲——EVT 是 CUTLASS 3.x 的**第二个核心创新**(第一个是 5 层抽象)。它把"epilogue 阶段可做的所有事"组织成一个**小型 DSL**,用户写一段"小表达式"就能组合 bias、ReLU、silu、scale、swizzle output、top-K softmax 等任意 fusion。
+这一章从 Ch7 epilogue 中拆出来单独讲——EVT 是 CUTLASS 3.x 的**第二个核心创新**(第一个是 5 层抽象)。它把"epilogue 阶段可做的所有事"组织成一个**小型 DSL**,用户写一段"小表达式"就能组合 bias、ReLU、silu、scale、swizzle output、top-K softmax 等任意 fusion。
 
 主文件:`include/cutlass/epilogue/fusion/sm90_visitor_*.hpp` 一族(共 5 个:`tma_warpspecialized`、`compute_tma_warpspecialized`、`load_tma_warpspecialized`、`store_tma_warpspecialized`、`topk_softmax`)。
 
@@ -156,6 +156,6 @@ Ch10 builder 章会讲 builder 怎么 dispatch 到 EVT-aware 的 partial spec。
 - ✅ 看 `examples/68`(`hopper_fp8_warp_specialized_grouped_gemm_with_blockwise_scaling`)的 epilogue 能讲清哪些节点在做什么。
 - ✅ 知道 builder 怎么按 EVT 类型选 partial spec(细节看 Ch10)。
 
-Ch11 看 kernel orchestrator + TileScheduler——它把 mainloop(Ch6)+ epilogue(Ch8)+ EVT(Ch9)+ scheduler 拼成一个完整 kernel。
+Ch9 看 kernel orchestrator + TileScheduler——它把 mainloop(Ch5)+ epilogue(Ch7)+ EVT(Ch8)+ scheduler 拼成一个完整 kernel。
 
 ---

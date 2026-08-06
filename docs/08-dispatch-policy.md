@@ -1,4 +1,4 @@
-## 第 9 章:DispatchPolicy——tag-inheritance 模式
+## 第 8 章:DispatchPolicy——tag-inheritance 模式
 
 这是 CUTLASS 3.x 的**架构精髓**——也是 `media/docs/cpp/` 几乎完全没有覆盖、本教程必须讲的东西。
 
