@@ -15,7 +15,7 @@ Ch10 讲了 Blackwell 桥接的**心智模型**——5 件不变 + 5 件变。�
 - `include/cute/arch/mma_sm100_desc.hpp:62/67/72` — `UMMA::Major` enum(K / MN) + `ScaleIn` + `ScaleOut`
 - `include/cute/arch/mma_sm100.hpp` — MMA traits + atom wrappers
 - `include/cutlass/gemm/kernel/sm100_tile_scheduler.hpp:400/421/423` — CLC PTX 内联(`clusterlaunchcontrol.try_cancel.*` / `query_cancel.*`)
-- `include/cutlass/pipeline/sm100_pipeline.hpp:935` — `PipelineCLCFetchAsync<Stages, ClusterShape>`(被 §7.8 动态调度器用)
+- `include/cutlass/pipeline/sm100_pipeline.hpp:935` — `PipelineCLCFetchAsync<Stages, ClusterShape>`(被 §7.5.4 动态调度器用)
 
 ### 11.0 本章导航
 

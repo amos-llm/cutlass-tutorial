@@ -21,21 +21,21 @@
 ### 7.0 本章导航
 
 ```text
-§6.1  Kernel 类(GemmUniversal<...>)的 SFINAE 路由       ← 入口
-§6.2  Arguments / Params / SharedStorage                  ← host 端 3 件套
-§6.3  operator()(Params, smem_buf) 入口                   ← device kernel 起点
-§6.4  Producer / Consumer 主循环(俯视)                  ← 6 个 helper 接力
-§6.5  调度器族(6 个调度器,6.5.1-6.5.6)                    ← Persistent / StreamK / Group / Dynamic / Static / sm100 变体
-§6.6  速查表 + 决策树 + 图配                              ← 横向对比 + 实战选型
-§6.7  章末:读完这一章你该做得到的事                       ← 自检 checklist
+§7.1  Kernel 类(GemmUniversal<...>)的 SFINAE 路由       ← 入口
+§7.2  Arguments / Params / SharedStorage                  ← host 端 3 件套
+§7.3  operator()(Params, smem_buf) 入口                   ← device kernel 起点
+§7.4  Producer / Consumer 主循环(俯视)                  ← 6 个 helper 接力
+§7.5  调度器族(6 个调度器,7.5.1-7.5.6)                ← Persistent / StreamK / Group / Dynamic / Static / sm100 变体
+§7.6  速查表 + 决策树 + 图配                              ← 横向对比 + 实战选型
+§7.7  章末:读完这一章你该做得到的事                       ← 自检 checklist
 ```
 
 读法建议:
 
-- **第一次读**:§6.1 → §6.4 一把过,先把 kernel 骨架 + 调度器接口契约装进脑子。
-- **第二次按需**:调度器族对比(§6.5.1-§6.5.6)按你项目里的形状选:大 M×N 走 §6.5.1、K-bound 走 §6.5.2、MoE/grouped 走 §6.5.3、Sm100 走 §6.5.4-§6.5.6。
-- **实战选型**:§6.6.1 决策树 + §6.6 速查表
-- **自检**:§6.7 checklist
+- **第一次读**:§7.1 → §7.4 一把过,先把 kernel 骨架 + 调度器接口契约装进脑子。
+- **第二次按需**:调度器族对比(§7.5.1-§7.5.6)按你项目里的形状选:大 M×N 走 §7.5.1、K-bound 走 §7.5.2、MoE/grouped 走 §7.5.3、Sm100 走 §7.5.4-§7.5.6。
+- **实战选型**:§7.6.1 决策树 + §7.6 速查表
+- **自检**:§7.7 checklist
 
 ### 7.1 Kernel 类(`GemmUniversal<...>`)的 SFINAE 路由
 
@@ -149,14 +149,14 @@ CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
     if (warp_group_role == Producer) {
       CollectiveMainloop::load_init(...);
       PipelineState write_state = make_producer_start_state<MainloopPipeline>();
-      // ... 详见 6.4
+      // ... 详见 7.4
     }
 
     // 4) Consumer 主循环
     if (warp_group_role == Consumer) {
       CollectiveMainloop::load_init(...);
       PipelineState read_state{};   // default-construct,初相位与 producer 反相
-      // ... 详见 6.4
+      // ... 详见 7.4
     }
 
     // 5) 收尾:epilogue
@@ -243,7 +243,7 @@ if (role == Consumer) {
 
 ## 第二部分:调度器族对比(本章核心)
 
-CUTLASS 3.x 把"决定下一个 tile 是哪一个"这件事抽成一个**多态 tag 家族**。所有调度器对外提供**同一个接口**——`fetch_next_work(...)` + `WorkTileInfo { M, N, L, ... }` + `compute_epilogue / fixup / separate_reduction`——所以 kernel orchestrator 那段代码(§6.3)**完全不变**;换调度器只是换 tag。
+CUTLASS 3.x 把"决定下一个 tile 是哪一个"这件事抽成一个**多态 tag 家族**。所有调度器对外提供**同一个接口**——`fetch_next_work(...)` + `WorkTileInfo { M, N, L, ... }` + `compute_epilogue / fixup / separate_reduction`——所以 kernel orchestrator 那段代码(§7.3)**完全不变**;换调度器只是换 tag。
 
 调度器分两大派:
 
@@ -650,11 +650,11 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 | `StreamKScheduler` (sm90 / 100) | `sm90_tile_scheduler_stream_k.hpp` / `sm100_tile_scheduler_stream_k.hpp` | K-bound 形状(M/N 小,K 大);`Heuristic` 自动挑 mode | K-parallel:每个 worker 算一段 K 子区间;partial → gmem workspace → atomic-reduce | gmem workspace + `BlockStripedReduce` + `NamedBarrier` |
 | `GroupScheduler` (sm90 / 100) | `sm90_tile_scheduler_group.hpp` / `sm100_tile_scheduler_group.hpp` | Grouped GEMM:多组 M/N/K 不同(如 MoE、variable-length) | Warp-scan 32 lane 一次定位 group;`L_idx` 复用存 group id | 不需要(每个 group 的 K 是独立的) |
 
-每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 §6.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
+每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 §7.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
 
 ### 7.6.1 选哪个调度器——决策树
 
-把 §6.5-§6.10 的"什么时候用"折成决策树:
+把 §7.5.1-§7.5.6 的"什么时候用"折成决策树:
 
 ```text
 你的 GEMM 是什么形状?
@@ -683,7 +683,7 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 
 
 
-持久 / 非持久调度的对照图(配 §6.5.1 / §6.5.4):
+持久 / 非持久调度的对照图(配 §7.5.1 / §7.5.4):
 
 ![persistent_static](../media/images/persistent_static.png)
 

@@ -249,7 +249,7 @@ mma(MainloopPipeline pipeline,
   Tensor tCrA = thread_mma.make_fragment_A(tCsA);                        // (MMA, MMA_M, MMA_K, PIPE)
   Tensor tCrB = thread_mma.make_fragment_B(tCsB);                        // (MMA, MMA_N, MMA_K, PIPE)
 
-  static_assert(... /* shape 校验, 见 §5.3.5 */);
+  static_assert(... /* shape 校验, 见 §5.3 */);
 
   // ⑤ prologue:第一次 mma,accumulate_ = Zero(从 0 开始)
   PipelineState smem_pipe_release = smem_pipe_read;

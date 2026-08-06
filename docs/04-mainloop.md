@@ -26,17 +26,12 @@
 §4.6  SharedStorage union                      ← smem 复用
 §4.7  本章没有合适的图                          ← callout
 §4.8  章末:读完这一章你该做得到的事            ← 自检 checklist
-§4.9  8 个方法的契约总结                       ← 速查表
-§4.10 Cluster 维度:CTA 间协作                  ← 物理实现(get_slice / multicast)
-§4.11 SharedStorage union                      ← smem 复用
-§4.12 本章没有合适的图                          ← callout
-§4.13 章末:读完这一章你该做得到的事            ← 自检 checklist
 ```
 
 读两次建议:
 
 - **第一次**(顺着读):§4.1 → §4.7 一把过,跟着 producer/consumer 走完 K-loop。
-- **第二次**(按需查):§4.9 速查表 + §4.13 checklist 当入门考卷,卡住回对应章节重读。
+- **第二次**(按需查):§4.4 速查表 + §4.8 checklist 当入门考卷,卡住回对应章节重读。
 
 ### 4.1 类头部分支(在文件前 1/3 段)
 

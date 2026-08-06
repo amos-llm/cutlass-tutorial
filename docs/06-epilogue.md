@@ -214,7 +214,7 @@ root = homogeneous_multiply_add(beta, C, inner)        // beta * C + (alpha * ac
 
 - `homogeneous_multiply_add<A>` 是 `template <typename A> struct homogeneous_multiply_add : public multiply_add<A, A, A>`(`functional.h:607`)。继承自 `multiply_add<A, B, C>`,operator 签名是 `(a, b, c) → a*b + c`。
 - `homogeneous_*` 前缀的算子都强制三个参数同一类型,只取 1 个 template 参数——这是为了绕过某些 Clang 版本对 `template template parameter` 单参数匹配的限制(见 `sm90_visitor_compute_tma_warpspecialized.hpp:60-83` 注释)。
-- 默认 epilogue 不需要手写——`Cutlass 3.x` 提供 `fusion::LinearCombination<...>` tag(见 §5.8 "写法 B"),`CollectiveBuilder` 自动选中 `Sm90LinearCombination`。
+- 默认 epilogue 不需要手写——`Cutlass 3.x` 提供 `fusion::LinearCombination<...>` tag(见 §6.8 "写法 B"),`CollectiveBuilder` 自动选中 `Sm90LinearCombination`。
 
 #### 6.6.2 加 per-row bias:`D = alpha * (A*B) + beta * C + bias`
 
@@ -246,7 +246,7 @@ root = homogeneous_multiply_add(beta, C, inner)     // beta * C + (alpha * acc +
        └── bias (ColBroadcast,per-row)
 ```
 
-**对比 §5.6.1**:bias 是作为**内层 FMA 的第三个参数**加入的——这是为什么 bias 的 stride 是 `_1,_0`(per-row)而不是 scalar。
+**对比 §6.6.1**:bias 是作为**内层 FMA 的第三个参数**加入的——这是为什么 bias 的 stride 是 `_1,_0`(per-row)而不是 scalar。
 
 #### 6.6.3 加 activation + per-row bias:`D = activation(alpha*acc + beta*C + bias)`
 
@@ -317,7 +317,7 @@ Array<ElementOutput, FragmentSize> result = tree.visit(frg_acc, epi_v, epi_m, ep
 
 #### 写法 A:手写 `Sm90EVT<...>` 节点(精细控制)
 
-延续 §5.6.1 的 `D = alpha*acc + beta*C` 例子,对应 `examples/49/49_collective_builder.cu:291-299`:
+延续 §6.6.1 的 `D = alpha*acc + beta*C` 例子,对应 `examples/49/49_collective_builder.cu:291-299`:
 
 ```cpp
 // 在 CollectiveEpilogue 的 Arguments 里:
@@ -359,7 +359,7 @@ using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBui
 |---|---|---|
 |代码长度|长(显式列所有 node)|短(几个 template 参数)|
 |调试粒度|细(节点类型一一可见)|粗(builder 内部 macro 展开)|
-|覆盖度|无限制(任意树)|~25 种 predefined(见 §5.9 速查表)|
+|覆盖度|无限制(任意树)|~25 种 predefined(见 §6.9 速查表)|
 |性能|相同(partial spec 路由给编译器)|相同|
 
 **实际项目经验**:
@@ -380,10 +380,10 @@ using CollectiveEpilogue = typename cutlass::epilogue::collective::CollectiveBui
 
 | 实际支持的 fusion | Tag(写法 B) | 内部 Sm90EVT(写法 A) |
 |---|---|---|
-| `D = alpha * acc + beta * C` | `LinearCombination<ElementD, ElementCompute, ElementC, ElementScalar, RoundStyle>` | `Sm90LinearCombination` (§5.6.1) |
+| `D = alpha * acc + beta * C` | `LinearCombination<ElementD, ElementCompute, ElementC, ElementScalar, RoundStyle>` | `Sm90LinearCombination` (§6.6.1) |
 | `D = activation(alpha*acc + beta*C)` | `LinCombEltAct<ActivationFn, ...>` | `Sm90LinCombEltAct` |
-| `D = alpha*acc + beta*C + per-row bias` | `LinCombPerRowBias<...>` | `Sm90LinCombPerRowBias` (§5.6.2) |
-| `D = activation(alpha*acc + beta*C + per-row bias)` | `LinCombPerRowBiasEltAct<ActivationFn, ...>` | `Sm90LinCombPerRowBiasEltAct` (§5.6.3) |
+| `D = alpha*acc + beta*C + per-row bias` | `LinCombPerRowBias<...>` | `Sm90LinCombPerRowBias` (§6.6.2) |
+| `D = activation(alpha*acc + beta*C + per-row bias)` | `LinCombPerRowBiasEltAct<ActivationFn, ...>` | `Sm90LinCombPerRowBiasEltAct` (§6.6.3) |
 | `D = alpha*acc + beta*C + per-col bias` | `LinCombPerColBias<...>` | `Sm90LinCombPerColBias` |
 | `D = activation(alpha*acc + beta*C + per-col bias)` | `LinCombPerColBiasEltAct<ActivationFn, ...>` | `Sm90LinCombPerColBiasEltAct` |
 | `D = per-row alpha*acc + per-row beta*C + per-row bias` | `PerRowLinCombPerRowBias<...>` | 同名 |
@@ -427,7 +427,7 @@ Ch9 builder 章会讲 builder 怎么 dispatch 到 EVT-aware 的 partial spec。
 
 - ✅ 看到 `Sm90EVT<Sm90Compute<...>, Child0, Child1, ...>` 能讲出树结构——第一个参数是 root node,后面是它的输入 child。
 - ✅ 区分 compute / load / store 三类节点各 30+ 种,知道什么时候用哪类。
-- ✅ 能手写一个 `D = alpha*acc + beta*C`(对应 `Sm90LinearCombination`,见 §5.6.1)和一个 `D = alpha*acc + beta*C + per-row bias`(对应 `Sm90LinCombPerRowBias`,见 §5.6.2)的 EVT 树。
+- ✅ 能手写一个 `D = alpha*acc + beta*C`(对应 `Sm90LinearCombination`,见 §6.6.1)和一个 `D = alpha*acc + beta*C + per-row bias`(对应 `Sm90LinCombPerRowBias`,见 §6.6.2)的 EVT 树。
 - ✅ 知道 `homogeneous_multiply_add<A>` = `multiply_add<A, A, A>` = `(a, b, c) → a*b + c`,是三元算子;对应源码 `functional.h:607`。
 - ✅ 知道 CUTLASS 预置的 activation 包括 `SiLu` / `GELU` / `Sigmoid` / `Tanh` / `ThresholdReLU` / `LeakyReLU` / `ReLu` / `Hardswish`(在 `cutlass/epilogue/thread/activation.h`),`SiLu` 是 `template <typename T> struct SiLu`,**直接用**。
 - ✅ 能区分写法 A(手写 `Sm90EVT<...>`) vs 写法 B(`operations.hpp` 里的 tag 如 `LinearCombination` / `LinCombPerRowBiasEltAct`),知道实际项目新手先用 tag,特殊需求手写。

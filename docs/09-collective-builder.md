@@ -10,7 +10,7 @@
 
 ### 9.0 sm90_gmma_builder.inl 里的 8 个 partial spec 怎么分
 
-`sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。本章 §8.2 给你看的「最大那个」只是 8 个里的 1 个,其他 7 个按相同结构存在(只是分流条件不同)。读这章之前先认清 8 个 spec 全表——否则你看 §8.2 会以为 builder 只能 cover 那个场景。
+`sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。本章 §9.2 给你看的「最大那个」只是 8 个里的 1 个,其他 7 个按相同结构存在(只是分流条件不同)。读这章之前先认清 8 个 spec 全表——否则你看 §9.2 会以为 builder 只能 cover 那个场景。
 
 每个 spec 都被一段 `cute::enable_if_t<...>` 在模板参数末尾分流。**13 个模板参数里,所有 spec 都共用前 12 个(arch, op_class, element, layout, alignment × 2, accumulator, tile, cluster, stage_count),唯一的分流维度是第 13 个 —— `KernelScheduleType`**。具体说,3 个开关决定落到哪个 spec:
 
@@ -237,10 +237,10 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 │  5 层固定骨架(永远不变)                                              │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ 1. GemmUniversalAdapter(§1.1)                              │  │
-│  │ 2. GemmUniversal<ProblemShape, Mainloop, Epilogue, Sched>(§6.1)│  │
+│  │ 2. GemmUniversal<ProblemShape, Mainloop, Epilogue, Sched>(§7.1)│  │
 │  │ 3. CollectiveMma(§4)                                       │  │
-│  │ 4. CollectiveEpilogue(§5 上半) + EVT(§5 下半)                  │  │
-│  │ 5. TileScheduler(§6.5)                                     │  │
+│  │ 4. CollectiveEpilogue + EVT(§6)                                │  │
+│  │ 5. TileScheduler(§7.5)                                     │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
 │  配置维度(每个维度对应一族 tag)                                       │
@@ -252,7 +252,7 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 │  │ A 走 smem (SS) vs register (RS)                              │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  Mainloop schedule tags(§7.2 / §7.6)                                  │
+│  Mainloop schedule tags(§8.2)                                         │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ KernelTmaWarpSpecialized    (default,1 consumer)            │  │
 │  │ KernelTmaWarpSpecializedPingpong(2 consumer 交替)            │  │
@@ -262,7 +262,7 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 │  │ KernelScheduleAuto (builder 启发式挑选)                       │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  Epilogue fusion tags(§5.9)                                          │
+│  Epilogue fusion tags(§6.9)                                          │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ LinearCombination            (默认,D = α*acc + β*C)          │  │
 │  │ LinCombEltAct                (加 activation)                  │  │
@@ -273,7 +273,7 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 │  │ ~25 种 predefined + 手写 Sm90EVT<...>                         │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  TileScheduler tags(§6.5)                                            │
+│  TileScheduler tags(§7.5)                                            │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ PersistentScheduler         (sm90 / sm100 默认)               │  │
 │  │ StreamKScheduler            (K-bound partial sum)            │  │
@@ -282,11 +282,11 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 │  │ StaticPersistentScheduler    (sm100 轻量版)                  │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
-│  Builder 路由(§8)                                                    │
+│  Builder 路由(§9.2)                                                    │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ CollectiveBuilder<13 个 template 参数>                       │  │
 │  │   ↓ is_same_v 静态枚举                                      │  │
-│  │ 8 partial specializations(§8.0):                              │  │
+│  │ 8 partial specializations(§9.0):                              │  │
 │  │   - 1: GMMA + TMA + WS + SS                                 │  │
 │  │   - 2: GMMA + TMA + WS + RS                                 │  │
 │  │   - 3: GMMA + TMA + WS + SS + FP8 fast-accum                │  │
