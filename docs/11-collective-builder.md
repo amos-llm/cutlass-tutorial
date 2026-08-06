@@ -1,6 +1,6 @@
-## 第 10 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
+## 第 11 章:CollectiveBuilder——把"形状 + 类型"压成具体实现
 
-### 8.0 sm90_gmma_builder.inl 里的 8 个 partial spec 怎么分
+### 11.0 sm90_gmma_builder.inl 里的 8 个 partial spec 怎么分
 
 `sm90_gmma_builder.inl` 这**一份文件**里有 8 个 `struct CollectiveBuilder` 的 partial specialization,**不是一份覆盖所有情况**。读 Ch11 之前先认清这 8 个 spec,否则 §8.2 给你看的「最大那个」会让你不知道还有别的,也不知道为什么自己的配置落到那个 spec。
 
@@ -66,13 +66,13 @@
 
 > **debug 提示**:遇到「`static_assert failed: ... CollectiveBuilder ...`」,**先翻这张表**——多半是你的 tag 落到了意料之外的 spec(例如你以为写的是 WS 但其实 spec 4 接管了,意味着「WS 路径被吞掉了」)。再看 auto picker 那段的注释,理解 auto 选了什么。
 
-### 8.1 它的任务
+### 11.1 它的任务
 
 `CollectiveBuilder<13 个模板参数>` 是一个 dispatcher: 给定 `(arch × op_class × element × layout × alignment × element × layout × alignment × accumulator × tile × cluster × stage × schedule)` 共 13 维空间里的一个组合,**挑出**一个 `CollectiveMma` partial specialization。
 
 它做的事很机械化(SELECT),但靠 partial specialization 路由,完全编译期,没有运行时代价。
 
-### 8.2 实际看一个 partial spec
+### 11.2 实际看一个 partial spec
 
 最大的(开头附近)`CollectiveBuilder<arch::Sm90, arch::OpClassTensorOp, ...>`:
 
@@ -156,14 +156,14 @@ public:
 
 具体可读性,因为 builder 的代码常被选:不要被文件大小劝退——这是"在每个 partial spec 干一件略有不同的事"。读时按 1-7 步骤理解。
 
-### 8.3 epilogue builder 是镜像
+### 11.3 epilogue builder 是镜像
 
 文件:`include/cutlass/epilogue/collective/builders/sm90_builder.inl`。同样结构,主要差异:
 
 - 多接 `(ElementC, LayoutC, AlignmentC, ElementD, LayoutD, AlignmentD, StagesC, StagesD, FragmentSize, ReuseSmemC, DelayTmaStore, ...)` 等。Caller 在 Ch2.3 看到。
 - 内部推 EVT 的根节点(如果用户给 EVT 就用,否则用 `DefaultEpilogue`)。
 
-### 8.4 "Auto" 实际上到底是什么
+### 11.4 "Auto" 实际上到底是什么
 
 `StageCountAutoCarveout<epi_bytes>` 不是一个"运行时选择",是**编译期**算法:
 
@@ -198,7 +198,7 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 
 > **debug 提示**: `PipelineStages < 你设的 StageCount<N>` 通常意味着 builder 选择了一个 fallback / 简化版本;`PipelineStages == 0` 几乎肯定是 `carveout_bytes > capacity_bytes`(epi SharedStorage 把整个 smem 吃光了)——静态断言会直接拒编译。
 
-### 8.5 "怎么改默认 schedule / stages / cluster:动手清单"
+### 11.5 "怎么改默认 schedule / stages / cluster:动手清单"
 
 |想做什么|怎么改|
 |---|---|
@@ -211,7 +211,7 @@ compute_stage_count_or_override(StageCountAutoCarveout<carveout_bytes_> stage_co
 
 实际项目里,"默认是 Pingpong 还是 Cooperative?"由 Builder 内部的经验启发式决定(参考 `media/docs/cpp/heuristics.md`,实际 Python 端在 `python/cutlass_library/heuristics.py`)。
 
-### 8.6 章末:读完这一章你该做得到的事
+### 11.6 章末:读完这一章你该做得到的事
 
 - ✅ 认清 `sm90_gmma_builder.inl` 里 8 个 partial specialization 的分流维度(gmem 路径 TMA/cp.async × WS/非 WS × SS/RS × FP8 fast-accum),并能根据 13 维模板参数推出自己的 GEMM 落到哪个 spec。
 - ✅ 知道 `is_use_rmem_A` 怎么决定 A 走 smem 还是 register,以及 `KernelScheduleAuto` 走的是 spec 8(internal auto picker)而非具体 spec。

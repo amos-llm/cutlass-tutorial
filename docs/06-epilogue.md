@@ -1,4 +1,4 @@
-## 第 8 章:深入 CollectiveEpilogue
+## 第 6 章:深入 CollectiveEpilogue
 
 Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(算子)→smem(D 缓存)→gmem(TMA store D)、同用 pipeline、同 swizzle、同 swappable 接口。区别只在:
 
@@ -8,7 +8,7 @@ Epilogue 和 Mainloop 是镜像:同样从 gmem→smem(TMA load C)→register(算
 
 主文件:`include/cutlass/epilogue/collective/sm90_epilogue_tma_warpspecialized.hpp`。
 
-### 5.1 Dispatch policy
+### 6.1 Dispatch policy
 
 ```cpp
 template <
@@ -38,7 +38,7 @@ struct Sm90TmaWarpSpecialized
 
 `EpilogueScheduleAuto` builder 缺省是哪个具体 `StagesC` / `StagesD` / `FragmentSize` / `ReuseSmemC` / `DelayTmaStore` 组合,看 `include/cutlass/epilogue/collective/builders/sm90_builder.inl`(Ch11 讨论)。
 
-### 5.2 默认 epilogue:`D = alpha * (A*B) + beta * C`
+### 6.2 默认 epilogue:`D = alpha * (A*B) + beta * C`
 
 ```cpp
 // 在 operator() 里的 forward path(简化):
@@ -57,7 +57,7 @@ for (...) {  // tiles
 
 > **你手写 GEMM 的对照**:你写 epilogue 时就是这几步——读 C、乘 β、乘 α + acc、写 D。CUTLASS 把 alpha/beta/转换类型切成一组 visitor 节点(下面)。
 
-### 5.3 TMA Store 路径
+### 6.3 TMA Store 路径
 
 跟 TMA Load 镜像——把 register tile 经过 smem 缓存再 store 到 gmem:
 
@@ -72,7 +72,7 @@ cute::copy(TiledCopyD, D_register_tile, D_gmem_block);
 
 TMA store 把"分散到多 lane 的 D 元素"高效打包成一个 gmem block 写。
 
-### 5.4 EVT(Epilogue Visitor Tree)——融合算子
+### 6.4 EVT(Epilogue Visitor Tree)——融合算子
 
 如果你不需要任何融合,上一节就够。需要 bias / ReLU / silu / scale 等,用 EVT。
 
@@ -188,7 +188,7 @@ struct HomogeneousSilu {
 
 即:自定义算子都需要用户写十几行模板 functor。CUTLASS 故意不内建所有 activation——为了编译期形状可控,只内建常见数学运算 + 几个常用 activation;其他通过用户 functor 扩展。
 
-### 5.5 跨章对比
+### 6.5 跨章对比
 
 |Example|在 epilogue 上加了什么|在哪|
 |---|---|---|
@@ -199,7 +199,7 @@ struct HomogeneousSilu {
 
 ![hierarchy-with-epilogue](../media/images/gemm-hierarchy-with-epilogue.png)
 
-### 5.6 章末:读完这一章你该做得到的事
+### 6.6 章末:读完这一章你该做得到的事
 
 - ✅ 知道 epilogue dispatch policy 5 个参数分别影响什么(StagesC、StagesD、FragmentSize、ReuseSmemC、DelayTmaStore)。
 - ✅ 能看懂 `Sm90EVT<Sm90Compute<...>, ...>` 嵌套语法——它就是"小 AST"。

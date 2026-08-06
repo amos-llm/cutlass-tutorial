@@ -1,10 +1,10 @@
-## 第 12 章:DispatchPolicy——tag-inheritance 模式
+## 第 9 章:DispatchPolicy——tag-inheritance 模式
 
 这是 CUTLASS 3.x 的**架构精髓**——也是 `media/docs/cpp/` 几乎完全没有覆盖、本教程必须讲的东西。
 
 文件:`include/cutlass/gemm/dispatch_policy.hpp`(覆盖 sm70 / sm80 / sm90 / sm100 / sm120 所有 dispatch tag)。
 
-### 7.1 核心思想:用空 struct 当标签,用继承触发 dispatch
+### 9.1 核心思想:用空 struct 当标签,用继承触发 dispatch
 
 ```cpp
 // 空标记
@@ -30,7 +30,7 @@ struct KernelTmaWarpSpecializedCooperative {};
 3. 在 `CollectiveMma<...>` 的**模板特化**(partial specialization)**匹配条件**里 `is_base_of_v<KernelTmaWarpSpecialized, ...Schedule>` 区分"这是一类 dispatch policy"。
 4. 在 `CollectiveMma<MainloopSm90TmaGmmaWarpSpecialized<Stages, ...>, ...>` 的 partial specialization 拿到具体变体。
 
-### 7.2 调度 tag 进化论
+### 9.2 调度 tag 进化论
 
 **重要**:CUTLASS 的"tag 进化论"是**约定层**(大家都叫 `KernelTmaWarpSpecialized*`)上的同辈结构,在 `include/cutlass/gemm/dispatch_policy.hpp` 里是这样声明:
 
@@ -57,7 +57,7 @@ WarpSpec      WarpSpec      WarpSpec
 
 **为什么 builder 不靠 C++ 继承来 dispatch 这三个基础 tag?** 因为它们在源码里没有父子关系,builder 用的是 `cute::is_same_v<Schedule, KernelTmaWarpSpecialized>(或 Pingpong / Cooperative)` 在 `static_assert` 与 `if constexpr` 里硬枚举——参见 `dispatch_policy.hpp` 中 `MainloopSm90TmaGmmaRmemAWarpSpecialized` 的 `static_assert`。这意味着你写一个新 schedule 时**必须**自己在那串枚举里加一行。
 
-### 7.3 用户如何"改 schedule"
+### 9.3 用户如何"改 schedule"
 
 `examples/49_hopper_gemm_with_collective_builder/49_collective_builder.cu` 把 Schedule 暴露成 template parameter:
 
@@ -75,7 +75,7 @@ ExampleRunner<cutlass::gemm::KernelTmaWarpSpecializedPingpong> runner;
 
 `KernelScheduleAuto` 是一个"占位 type"——builder 看到它就用一个 default tag 替换。看到具体 `KernelTmaWarpSpecializedPingpong` 就是用户的明确选择。
 
-### 7.4 SFINAE 接入点——`detail` 命名空间
+### 9.4 SFINAE 接入点——`detail` 命名空间
 
 `cutlass::gemm::detail`(`include/cutlass/gemm/gemm.h`)里只提供了 **1 个** 真正存在的 helper——`IsCutlass3GemmKernel`,靠 SFINAE 探测 `Kernel::ProblemShape` 别名是否存在来区分 3.x 和 2.x kernel:
 
@@ -99,7 +99,7 @@ struct IsCutlass3GemmKernel<GemmKernel, cute::void_t<typename GemmKernel::Proble
 
 > 想"看 kernel 当前用什么 schedule"是合法的 — 直接写 `Kernel::DispatchPolicy::Schedule`(`MainloopSm90*GmmaWarpSpecialized` 已经 `using Schedule = KernelSchedule;`),不需要 helper。但 CUTLASS 没有单独再 typedef 成 `GetMmaPipeline` 这种便利别名。
 
-### 7.5 这一章的核心 takeaway
+### 9.5 这一章的核心 takeaway
 
 **tag-inheritance dispatch** 是 CUTLASS 3.x 实现"配置空间巨大但每个具体实现编译期最优"的关键——比 2.x 的 DefaultGemmUniversal 工厂好得多,因为编译器**完全**只编当前用户选定的那个 partial specialization,生成的代码无冗余。
 
@@ -111,7 +111,7 @@ struct IsCutlass3GemmKernel<GemmKernel, cute::void_t<typename GemmKernel::Proble
 
 入口就在 `dispatch_policy.hpp` + `kernel/sm90_*.hpp` 的 SFINAE 路由 + `kernel/detail/` helper。
 
-### 7.6 章末:读完这一章你该做得到的事
+### 9.6 章末:读完这一章你该做得到的事
 
 - ✅ 在自己的代码里手写 `using Schedule = KernelTmaWarpSpecializedPingpong;` 替换 `KernelScheduleAuto`,看到 builder 走不同代码路径。
 - ✅ 在 `dispatch_policy.hpp` 里读懂 tag 树。

@@ -4,7 +4,7 @@
 
 这一章**不引入**新概念——是把 Ch1-8 的所有主题打包成"用户故事"。
 
-### 9.1 这个例子做了什么
+### 12.1 这个例子做了什么
 
 把 Ch2 的 GEMM 包装到 `ExampleRunner<...>` 模板里,允许在 **编译期** 改 4 个东西:
 
@@ -68,7 +68,7 @@ int main() {
 }
 ```
 
-### 9.2 加 EVT bias + ReLU fusion 的具体写法
+### 12.2 加 EVT bias + ReLU fusion 的具体写法
 
 ```cpp
 // ReLU 不是 `cutlass::ReLU` 直接可用;CUTLASS 预置的是模板化的
@@ -93,7 +93,7 @@ if constexpr (UseCustomEVT) {
 
 `Sm90EVT<Op, ...Args>` 是一个 nested type:Op 是当前节点的算子,Args 是该算子的输入子节点列表。叶子节点(`Sm90AccFetch` / `Sm90SrcFetch` / `Sm90ScalarBroadcast`)直接提供数据。
 
-### 9.3 Builder 重新解析的 4 个 user 参数
+### 12.3 Builder 重新解析的 4 个 user 参数
 
 当用户在 `ExampleRunner<Pingpong, ...>` 改 MainloopScheduleType:
 
@@ -110,7 +110,7 @@ if constexpr (UseCustomEVT) {
    - `GemmUniversal<..., StreamKScheduler>` 的 SFINAE 路由(Ch8.1)— 因为 `StreamKScheduler` 不在 mainloop 的 kernel schedule tree 里,只影响 kernel 匹配的 TileScheduler。
    - 这会进 `sm90_tile_scheduler_stream_k.hpp` 的 partial spec。
 
-### 9.4 这章的 takeaway
+### 12.4 这章的 takeaway
 
 读 `examples/49` 时反复出现的 4 个 `*Type` template 参数 + `UseCustomEVT` bool,**对应 Ch9 (dispatch policy) + Ch11 (builder) + Ch6 (EVT) + Ch8 (scheduler) 这 4 件事**。
 
@@ -122,7 +122,7 @@ if constexpr (UseCustomEVT) {
 - 切 TileScheduler:换持久 kernel 调度策略
 - 切 EVT:加融合算子
 
-### 9.5 章末:读完这一章你该做得到的事
+### 12.5 章末:读完这一章你该做得到的事
 
 - ✅ 把 `examples/49` 完整读一遍——它的代码结构跟 Ch1-8 的所有抽象都对应。
 - ✅ 修改 `ExampleRunner<KernelTmaWarpSpecializedPingpong>` 跑一次,确认 mainloop 切到了双 warp group。

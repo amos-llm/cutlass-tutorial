@@ -1,4 +1,4 @@
-## 第 5 章:smem pipeline 与 barrier 抽象
+## 第 4 章:smem pipeline 与 barrier 抽象
 
 这一章是 CUTLASS 3.x **真正的"概念孵化器"**——mainloop / epilogue / kernel orchestrator / scheduler 都依赖这一套 `PipelineTmaAsync` / `PipelineAsync` / `PipelineTmaStore` 抽象,但它**没有任何一个章节真正把它当主语讲过**。
 

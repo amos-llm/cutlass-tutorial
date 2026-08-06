@@ -1,4 +1,4 @@
-## 第 6 章:深入 CollectiveMainloop(本教程核心价值)
+## 第 5 章:深入 CollectiveMainloop(本教程核心价值)
 
 如果本教程只选一章细读,选这一章。Mainloop 是 CUTLASS 3.x 写得最繁的部分——也是体现"5 层抽象是否值钱"的地方。
 
@@ -8,7 +8,7 @@
 
 读法:**从类头部分支开始 → 类型别名 → 8 个方法的角色 → `load_init` 怎么构造 CuTe 视图 → `load` 里 producer 怎么发 TMA → `mma` 里 consumer 怎么推到 WGMMA → 收尾**。
 
-### 4.1 类头部分支(在文件前 1/3 段)
+### 5.1 类头部分支(在文件前 1/3 段)
 
 ```cpp
 namespace cutlass::gemm::collective {
@@ -49,7 +49,7 @@ struct CollectiveMma<
 
 前 7 个由 builder 推;后 8 个 A/B 原子是 "**smem A/B 各自的 4 件套**"。你写 mainloop 时不会手写这些;改 builder 输入 `ElementA * LayoutA * AlignmentA` 后,这些都会被推出来。
 
-### 4.2 类型别名总解
+### 5.2 类型别名总解
 
 ```cpp
 // 在 collective_mma 内部的类型,按"出现频率"排:
@@ -86,7 +86,7 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
 
 > **你手写 GEMM 的对照**:你写 raw `mbarrier.*` PTX(`mbarrier.try_wait.parity` / `mbarrier.arrive.expect_tx`)+ `__syncthreads()` + 手动维护的 stage 状态。`PipelineTmaAsync<Stages>` 就是把这套封装起来。**不要写 `__threadfence_block()`**:那是 Ampere 之前 cp.async 还没硬件 barrier 时的 workaround,Hopper mbarrier 自带 release/acquire 语义,再写就冗余。
 
-### 4.3 mainloop 的三阶段:setup → K-loop → teardown
+### 5.3 mainloop 的三阶段:setup → K-loop → teardown
 
 先把整个 mainloop 拆成三阶段,再逐个方法钻进去。
 
@@ -109,7 +109,7 @@ using PipelineStorage = ...;  // pipeline 屏障的 smem 布局
 
 下面 4 节按 `load_init → load → mma → *_tail` 顺序,**逐行讲里面每个 CuTe 计算在做什么**。读完这 4 节,Ch5 真正讲的是什么就清楚了。
 
-### 4.4 `load_init`:CuTe gmem 视图的构造
+### 5.4 `load_init`:CuTe gmem 视图的构造
 
 源码对应段:**`load_init`** 函数体,**kernel 入口各调一次**(producer / consumer 都要拿到 gmem 视图)。
 
@@ -169,7 +169,7 @@ Mode index:  0      1      2
 
 `load_init` 函数体末尾的注释明确:**"first two elements must be gA_mkl and gB_nkl"**。这是 **kernel 层能依赖的契约**——kernel orchestrator(Ch8)只知道这俩名字,具体 layout 怎么切由 collective 推。**契约的好处**:换 collective 实现(比如从 SS 换 RS,或 sm90 换 sm100),kernel 代码不动。
 
-### 4.5 `load`:producer 的 CuTe 流程
+### 5.5 `load`:producer 的 CuTe 流程
 
 源码对应段:**`load`** 函数体,**单线程执行**(靠 `cute::elect_one_sync()`),每个 K-tile 调一次。
 
@@ -297,7 +297,7 @@ TMA 的发起方其实是 **single thread**(warp 0 lane 0),但它操作的是一
 
 K-loop 的循环次数 `k_tile_count` 是**运行时**(K / Stages_t大小),不是编译期常量。如果编译器把循环 unroll,会按 K=2048/BlockK=32 这种「典型值」展开,**但实际 GEMM 可能 K=2000**(只跑 62 次),展开的代码就有 stale state。`NO_UNROLL` 强制按 runtime 推进,处理 K 任意大小。
 
-### 4.6 `mma`:consumer 的 CuTe 流程
+### 5.6 `mma`:consumer 的 CuTe 流程
 
 源码对应段:**`mma`** 函数体,**全部 consumer warpgroup 线程都执行**(不只是单线程)。这是 Ch5 最长、最重要的函数。
 
@@ -517,7 +517,7 @@ wgmma.mma_async.sync.aligned.m64n16k16.f32.f16.f16.f32
 
 > **你手写 GEMM 的对照**:你写一个 `float acc[BLOCK_M][BLOCK_N] = {0}` 或 `__shared__` accumulator。这里 `accum` 是 rmem 视图,prologue `Zero` 起到「等价清零」的作用。
 
-### 4.7 `load_tail` + `mma_tail`:K-loop 收尾
+### 5.7 `load_tail` + `mma_tail`:K-loop 收尾
 
 源码对应段:**`load_tail`** + **`mma_tail`** 两个函数体。
 
@@ -557,7 +557,7 @@ mma_tail(MainloopPipeline pipeline, PipelineState smem_pipe_release, int k_tile_
 
 `smem_pipe_release.advance(k_tile_count)` —— 把 `smem_pipe_release` state 推到对应 stage。K-loop 已经 `++smem_pipe_release` 推进过 mainloop 部分,这里再 `advance(k_tile_count)` 把 prologue 剩余 + mainloop 剩余的 stage 全部 cover 到。
 
-### 4.8 Pipeline 4 方法语义:Ch5 必须先校准的 4 个词
+### 5.8 Pipeline 4 方法语义:Ch5 必须先校准的 4 个词
 
 `PipelineTmaAsync<N>` 的 4 个方法每个有明确的「阻塞 / 非阻塞 / 可能在某些条件下退化」语义,写 mainloop 时不能搞混:
 
@@ -575,7 +575,7 @@ mma_tail(MainloopPipeline pipeline, PipelineState smem_pipe_release, int k_tile_
 
 > 一句话总结:**acquire / wait 是「等我需要的东西就绪」,commit / release 是「通知对方我这边就绪/用完」。** 两个阻塞方法(acquire、wait)是真正让线程「停下来等」的同步点;两个非阻塞方法只是更新 barrier 状态、不卡线程。
 
-### 4.9 8 个方法的契约总结
+### 5.9 8 个方法的契约总结
 
 producer 和 consumer 之间的契约**只通过两类东西传**:
 
@@ -602,7 +602,7 @@ producer 和 consumer 之间的契约**只通过两类东西传**:
 | 7 | `mma` | consumer K-loop | `get_slice` warpgroup 切 TiledMma + `partition_A/B` smem 摊分 + `make_fragment_A/B` rmem 分配 + `warpgroup_fence/arrive/commit/wait` async mma 同步 + `cute::gemm` 推 WGMMA |
 | 8 | `mma_tail` | consumer 一次 | `warpgroup_wait<0>` 等所有 mma retire |
 
-### 4.10 Cluster 维度:CTA 间协作
+### 5.10 Cluster 维度:CTA 间协作
 
 `cute::cluster_size_v<ClusterShape>`、`cute::block_rank_in_cluster()` 出现在 `tile_to_shape` / `subtile` / `get_slice(cluster_local_block_id)` 等地方——具体用法是:
 
@@ -615,7 +615,7 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 `load` 里 `get_slice(cluster_local_block_id)`(Ch5.5.2)就是 cluster 协作在 TMA 加载时的物理实现:每个 CTA 拿 TMA desc 的不同切片,**整个 cluster 协作加载同一个 (BLK_M, BLK_N) tile**。`SM90_TMA_LOAD_MULTICAST` 是更进一步的优化——同一份数据 multicast 给 cluster 内多个 CTA,不用各自重新加载。
 
-### 4.11 SharedStorage union
+### 5.11 SharedStorage union
 
 回到 Ch2.6。Mainloop 用完 smem 之后,这块交给 epilogue 复用——`union { MainloopTensorStorage; EpilogueTensorStorage; }`。
 
@@ -661,7 +661,7 @@ auto neighbor_smem_A = cluster_collective_load(...);
 
 `KernelScheduleAuto` 就是按这条启发式选;用户写 `KernelTmaWarpSpecialized` / `_Pingpong` / `_Cooperative` 之一就是显式覆盖。**这些 tag 之间没有 C++ 继承关系**(Ch9)——是同辈空 struct,builder 用 `is_same_v` 硬枚举路由。
 
-### 4.12 本章没有合适的图
+### 5.12 本章没有合适的图
 
 Ch5 之前引用过两张流水线图(`software-pipeline.png` + `cutlass-threadblock-mma-pipelined.png`),但**两张都不对**:
 

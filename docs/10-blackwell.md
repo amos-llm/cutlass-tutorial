@@ -1,16 +1,16 @@
-## 第 13 章:Blackwell 桥接——同样的 5 层架构,换了一组原子
+## 第 10 章:Blackwell 桥接——同样的 5 层架构,换了一组原子
 
 最后这一章**反向**证实 Ch1-8 的 5 层抽象为什么值钱:同一个 5 层框架在 Blackwell 上几乎是逐行对应,但底层的 mma / smem 单元变了。
 
 **核心 takeaway**:你在 Hopper 路径上学到的 5 层(CUTLASS 3.x 5-tier)架构,**无需重新学**就能进入 Blackwell。你只需重新学**第 3 层(CollectiveMainloop 的 MMA 部分)+ 几处 epilogue 接口面(TMEM)**。
 
-### 11.1 什么没变:5 层框架完全保持
+### 10.1 什么没变:5 层框架完全保持
 
 5 个类名 — `GemmUniversalAdapter` / `kernel::GemmUniversal<...>` / `collective::CollectiveMma` / `epilogue::CollectiveEpilogue` / `*TileScheduler` — 在 sm_100 上全部保留。
 
 `examples/70_blackwell_gemm/` 的 .cu 文件跟 `examples/48_hopper_warp_specialized_gemm/` 的 .cu 文件**几乎是逐行对应**——`TileShape` / `ClusterShape` / `StageCountType` / `KernelScheduleType` 都在同一位置。读 `examples/70` 时,你会觉得"已经在 Ch2 读过一遍"。
 
-### 11.2 什么变了:WGMMA → UMMA,smem 部分结果 → TMEM
+### 10.2 什么变了:WGMMA → UMMA,smem 部分结果 → TMEM
 
 #### MMA:`cute::GMMA::ss_op_selector` → `cute::UMMA::Major`(不再有 selector)
 
@@ -54,7 +54,7 @@ umma(...).to(tmem_alloc);     // 直接落到 tmem
 |Epilogue|`epilogue/collective/sm90_epilogue_tma_warpspecialized.hpp`|`epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp`(sm100 有独立 epilogue 文件,以及 `sm100_epilogue_array_tma_warpspecialized.hpp` 等变体)|
 |Scheduler|`kernel/sm90_tile_scheduler.hpp`|`kernel/sm100_tile_scheduler.hpp`(多 `cluster_launch_control`)|
 
-### 11.3 新类型宇宙:block-scaled(mx_*)与窄精度
+### 10.3 新类型宇宙:block-scaled(mx_*)与窄精度
 
 Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":每 32 个元素共享一个 scale factor,把窄精度的精度损失用统计平均扳回来。
 
@@ -67,7 +67,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 > 这一节**只**列出类型名,不教 MXFP8 数学。要学 MXFP8 看 NVIDIA GPU 上的官方 OCaml 文档 / `cutlass/tools/library/include/cutlass/library_block_scaled.h`(本教程保持"是什么,不为什么")。
 
-### 11.4 起步路径
+### 10.4 起步路径
 
 读 Blackwell 路径,**4 个入口**:
 
@@ -81,7 +81,7 @@ Hopper 时代主要在 FP16/BF16/TF32/FP8。Blackwell sm_100 引入"块缩放":�
 
 `blackwell_cluster_launch_control.md`(在 `media/docs/cpp/` 下)讲 sm_100 新加的 cluster 同步原语 — cluster 比 sm_90 更大,用新原语管理。
 
-### 11.5 章末:从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
+### 10.5 章末:从 Hopper 视角看 Blackwell 的 5 件不变 + 5 件变
 
 |不变|变|
 |---|---|

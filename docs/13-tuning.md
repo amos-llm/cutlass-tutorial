@@ -2,7 +2,7 @@
 
 这一章不讲新机制——只是把 Ch1-9 给的所有"开关"整理成一张调参表,以及"怎么科学地 autotune"。
 
-### 10.1 调参组合空间一览
+### 13.1 调参组合空间一览
 
 `examples/48` 默认配置已经接近峰值性能。但不同 (M, N, K) shape + 不同硬件 + 不同内存层级下,还是要调。
 
@@ -19,7 +19,7 @@
 
 > **你手写 GEMM 的对照**:这些就是你 grid_dim / block_dim / smem 切分 / cluster_dim / pipeline depth / swizzle 选型的全部决定项——CUTLASS 只是把它们"显式化"了。
 
-### 10.2 (M, N, K) shape 决定的"匹配模式"
+### 13.2 (M, N, K) shape 决定的"匹配模式"
 
 经验法则(可直接套):
 
@@ -36,7 +36,7 @@
 
 > 这张表来自 `media/docs/cpp/gemm_api_3x.md` + CUTLASS profiling 多年的结果,但**实际**还要用 `cutlass_profiler` 跑一遍才知(下面)。
 
-### 10.3 Swizzle / raster / L2 cache
+### 13.3 Swizzle / raster / L2 cache
 
 CTAs 顺序与 L2 命中:
 
@@ -48,13 +48,13 @@ CTAs 顺序与 L2 命中:
 
 为什么 swizzle 有用:CTAs 的 tile id 不再按行/列顺序访问,而是按 swizzle 间隔访问——访问次序被打散,L2 缓存被"沿 tile 群循环用"而不是一次性被前面的 CTA 用完。
 
-### 10.4 TMA multicast
+### 13.4 TMA multicast
 
 `ClusterShape` 大了之后,sm_90 的 TMA 支持 multicast:一个 TMA load 让多个 CTA 都各拿到相同的 smem 数据,节省 gmem 带宽。**条件**:load 的 src 形状与 cluster 大小对齐。
 
 具体看 `media/docs/cpp/dependent_kernel_launch.md` + `examples/63_hopper_gemm_with_weight_prefetch/` 的 pre-fetch + multi-cast pattern。
 
-### 10.5 `cute::print` / `cute::print_tensor` / `cute::print_latex` 调试
+### 13.5 `cute::print` / `cute::print_tensor` / `cute::print_latex` 调试
 
 ```cpp
 // 调试某个 layout 的索引模式:
@@ -68,7 +68,7 @@ cute::print_tensor(A_smem_register_tile); // 同样的 register tile,按 mma vie
 
 > 这些 hook 非常有用——尤其当你的 swizzle 后发现有些 lane 拿到错误数据时,print 一下能清晰看到"lattice"在每 lane 上的分布。`print_latex` 对 swizzle layout 特别直观——会画出 XOR 偏移图。
 
-### 10.6 `cutlass_profiler` 一段最小使用
+### 13.6 `cutlass_profiler` 一段最小使用
 
 文件:`tools/profiler/src/main.cpp`。`cutlass_profiler` 是 CUTLASS 自带的 autotuner(已编译好的二进制)。
 
@@ -107,7 +107,7 @@ make -j cutlass_profiler
 
 输出末尾会有 GFLOPS / TFlops 数字。**profile 之前要先暖机**——`--warmup-iterations=10`(默认就 10)让 GPU 时钟稳定。
 
-### 10.7 经验法则
+### 13.7 经验法则
 
 - **经验式 1**:从 default 跑一遍 `cutlass_profiler`,得 baseline FLOPS。
 - **经验式 2**:换 tile size,跑一遍;每个 tile 都"顺着 shape 推 stage 数 + 集群大小"。
@@ -118,13 +118,13 @@ make -j cutlass_profiler
 - **经验式 7**:`max_swizzle_size` 在 Hopper 上是 8 时最普适。
 - **经验式 8**:alignment 128-bit (16 字节) 是 TMA baseline;8 字节 (64-bit) 对齐不够,TMA 加载会要求更宽的对齐才能跑出满带宽。
 
-### 10.8 图配
+### 13.8 图配
 
 ![3.x gemm peak performance](../media/images/cutlass-3.5.1-gemm-peak-performance.png)
 
 (以较新一张 3.x 数据图作为参考——你看到的可能是 FP8 / FP16 不同图。)
 
-### 10.9 章末:读完这一章你该做得到的事
+### 13.9 章末:读完这一章你该做得到的事
 
 - ✅ 用 `cutlass_profiler --operation=Gemm --cta_m=128 --cta_n=128 --cta_k=32 --stages=4 ...` 跑一次 baseline。
 - ✅ 在不同的 (M, N, K) shape 上用表格 10.2 推荐一组 tile+cluster,各自 profiler 一遍。

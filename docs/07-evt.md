@@ -1,4 +1,4 @@
-## 第 9 章:Epilogue Visitor Tree(EVT)——融合算子 DSL
+## 第 7 章:Epilogue Visitor Tree(EVT)——融合算子 DSL
 
 这一章从 Ch8 epilogue 中拆出来单独讲——EVT 是 CUTLASS 3.x 的**第二个核心创新**(第一个是 5 层抽象)。它把"epilogue 阶段可做的所有事"组织成一个**小型 DSL**,用户写一段"小表达式"就能组合 bias、ReLU、silu、scale、swizzle output、top-K softmax 等任意 fusion。
 
