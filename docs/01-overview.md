@@ -2,6 +2,13 @@
 
 本章是教程的入口。**一篇文章三件事**,目标:读完脑子里有"5 层骨架 + 一份能跑通的代码 + 4 个能改的开关"。后续章节才分别展开每一层。
 
+### 本章涉及 CUTLASS 源文件
+
+- `examples/48_hopper_warp_specialized_gemm/48_hopper_warp_specialized_gemm.cu` — 入口 example,5 步 host API
+- `examples/49_hopper_gemm_with_collective_builder/49_collective_builder.cu:252-258` — 4 个 `*Type` switch 默认值
+- `include/cutlass/gemm/device/gemm_universal_adapter.h:232/313/760` — Adapter `can_implement` / `initialize` / `run`
+- `include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp:59-65` — `GemmUniversal` 模板签名(注意 `TileScheduler_` 无默认)
+
 ### 1.0 本章要做的事
 
 ```text
@@ -134,27 +141,27 @@ Adapter 是一个薄 stateful handle——内部持有一个 kernel `Params para
 
 **角色**:kernel 体本身——CTA 之间谁跑哪个 tile、CTA 内 producer/consumer 各跑什么、pipeline 怎么推进、cluster barrier 怎么同步。
 
-模板签名:
+模板签名(`include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp:59-65`):
 
 ```cpp
 template <
   class ProblemShape_,        // M, N, K
   class CollectiveMainloop_,  // 第 3 层
   class CollectiveEpilogue_,  // 第 4 层
-  class TileScheduler_        // 第 5 层(默认 void)
+  class TileScheduler_        // 第 5 层(无默认,必须显式传)
 >
 class GemmUniversal { ... };  // 包含 CUTLASS_DEVICE operator()(Params, char* smem_buf)
 ```
 
-`TileScheduler_` 默认 `void`,内部通过 `TileSchedulerSelector` 路由为 `PersistentTileSchedulerSm90`(SM90 Hopper 默认)。改写它(传 `StreamKScheduler` / `GroupScheduler`)就切调度器,**kernel 体代码不变**——这是 Ch6 / Ch7 的核心机制。
+`TileScheduler_` **没有模板默认**——必须显式传。`examples/49` 的 `ExampleRunner` 里把它包成 `TileSchedulerType` 模板参数,**默认值是 `cutlass::gemm::PersistentScheduler`**(`49_collective_builder.cu:258`)。这个 tag 经过 `detail::TileSchedulerSelector<PersistentScheduler, ArchTag, TileShape, ClusterShape>` 路由,ArchTag = Sm90 时落到 `PersistentTileSchedulerSm90`(SM90 Hopper 默认调度器)。改写它(传 `StreamKScheduler` / `GroupScheduler` / `DynamicPersistentScheduler`)就切调度器,**kernel 体代码不变**——这是 Ch6 的核心机制。
 
 #### 第 3 层:CollectiveMainloop
 
 主文件:`include/cutlass/gemm/collective/sm90_mma_tma_gmma_ss_warpspecialized.hpp`。
 
-**角色**:把 A/B 从 gmem 拉入 smem、smem 入 register、用 WGMMA / UMMA 做 mma、再把结果放进 accumulator。这一层封装最繁——Ch3 展开。
+**角色**:把 A/B 从 gmem 拉入 smem、smem 入 register、用 WGMMA / UMMA 做 mma、再把结果放进 accumulator。这一层封装最繁——Ch4 展开。
 
-调用接口标准签名(对任意架构、任意 mma 形态;成员对应 Ch3 的实际实现):
+调用接口标准签名(对任意架构、任意 mma 形态;成员对应 Ch4 的实际实现):
 
 ```cpp
 struct CollectiveMma {

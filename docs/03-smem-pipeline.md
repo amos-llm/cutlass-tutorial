@@ -2,11 +2,18 @@
 
 这一章是 CUTLASS 3.x **真正的"概念孵化器"**——mainloop / epilogue / kernel orchestrator / scheduler 都依赖这一套 `PipelineTmaAsync` / `PipelineAsync` / `PipelineTmaStore` 抽象,但它**没有任何一个章节真正把它当主语讲过**。
 
-读完 Ch4,你会明白为什么 `producer_acquire` / `consumer_wait` 是必须的、为什么 `PipelineState` 要分 producer 和 consumer 两份、`Stages` 是什么、为什么 TMA 路径上 `producer_commit` 是 NoOp、cluster barrier 怎么跟 single-CTA barrier 区分。
+读完本章,你会明白为什么 `producer_acquire` / `consumer_wait` 是必须的、为什么 `PipelineState` 要分 producer 和 consumer 两份、`Stages` 是什么、为什么 TMA 路径上 `producer_commit` 是 NoOp、cluster barrier 怎么跟 single-CTA barrier 区分。
 
 主文件:`include/cutlass/pipeline/sm90_pipeline.hpp` + `pipeline.hpp`(`PipelineAsync` 与 `PipelineTmaStore`)。
 
-### 4.1 问题的提出:smem 上的 producer / consumer 怎么同步
+### 本章涉及 CUTLASS 源文件
+
+- `include/cutlass/pipeline/sm90_pipeline.hpp:171` — `PipelineState`
+- `include/cutlass/pipeline/sm90_pipeline.hpp:271/655/766/1015` — 4 类 Sm90 pipeline(`PipelineTmaAsync` / `PipelineTmaStore` / `PipelineTransactionAsync` / `PipelineAsync`)
+- `include/cutlass/pipeline/sm100_pipeline.hpp:935` — `PipelineCLCFetchAsync`(Sm100 CLC pipeline)
+- `include/cutlass/arch/barrier.h:181/342/546` — `NamedBarrier` / `ClusterBarrier` / `ClusterTransactionBarrier`
+
+### 3.1 问题的提出:smem 上的 producer / consumer 怎么同步
 
 mainloop 里有 producer warpgroup(TMA 把数据从 gmem 拉入 smem)和 consumer warpgroup(WGMMA 从 smem 读数据做 mma)两个角色。它们共享同一块 smem 的 Stages 个 slot,典型 3-5 个 stage 流水线:
 
@@ -29,7 +36,7 @@ CUTLASS 用 **mbarrier**(NVIDIA 的 hardware barrier,Hopper+ 引入)实现这套
 
 整个 CUTLASS 的 pipeline 抽象,就是把这套原语包成"看起来像 smem 队列"的 API。
 
-### 4.2 5 类 pipeline
+### 3.2 5 类 pipeline
 
 `include/cutlass/pipeline/pipeline.hpp` + `sm90_pipeline.hpp` + `sm100_pipeline.hpp` 里定义了 5 类 pipeline,选哪个看数据流方向 + smem 类型:
 
@@ -39,11 +46,11 @@ CUTLASS 用 **mbarrier**(NVIDIA 的 hardware barrier,Hopper+ 引入)实现这套
 | `PipelineTmaStore<Stages>` | `sm90_pipeline.hpp:655` | **epilogue 的 register → smem → gmem**(TMA store) | register → smem(producer)、smem → gmem(TMA)|
 | `PipelineAsync<Stages>` | `sm90_pipeline.hpp:1015` | **不用 TMA 的 smem 路径**(cp.async,sm80 旧式)| gmem → smem(cp.async producer)、smem → register(consumer)|
 | `PipelineTransactionAsync<Stages>` | `sm90_pipeline.hpp:766` | 多生产者协同时的 transactional 路径(避免同一 stage 被多个 producer 抢)| 同 PipelineAsync,但带 transaction semantics |
-| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `sm100_tile_scheduler.hpp` | **Sm100 调度器的 CLC pipeline**(Ch9 Sm100 节)| 调度器专用 |
+| `PipelineCLCFetchAsync<Stages, ClusterShape>` | `cutlass/pipeline/sm100_pipeline.hpp:935` | **Sm100 调度器的 CLC pipeline**(Ch11 §11.3)| 调度器专用,被 `sm100_*_warpspecialized*.hpp` 各调度器用 |
 
 注意 Hopper 上**默认 mainloop 走 `PipelineTmaAsync`**——TMA 的 `arrive_and_expect_tx` 由 producer 发起,`complete_transaction` 由硬件在 TMA 写完时自动调用,**producer 那边不需要显式 `commit`**。这跟 Ampere 时代的 cp.async 路径不一样。
 
-### 4.3 6 个 helper 的语义
+### 3.3 6 个 helper 的语义
 
 `PipelineTmaAsync` 暴露 6 个 helper,**严格成对使用**(producer 2 个,consumer 2 个,辅助 2 个):
 
@@ -69,7 +76,7 @@ void producer_commit(PipelineState state, uint32_t bytes) {
 }
 ```
 
-为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch5 mainloop §5.4 会强调)。
+为什么 TMA 路径 `producer_commit` 是 NoOp:TMA descriptor 启动时已经 `arrive_and_expect_tx` 了 barrier,硬件完成 TMA 时会自动 `complete_transaction`,**这条 helper 在 TMA 路径上就是个 placeholder**。如果你从 cp.async 移植过来会习惯性地写一行 `producer_commit`,**Hopper 上这一行冗余**,可省(Ch4 mainloop §4.8 会强调)。
 
 #### Consumer 侧
 
@@ -90,7 +97,7 @@ void consumer_release(PipelineState state) {
 - `producer_try_acquire` / `consumer_try_wait`:非阻塞版本,带 timeout(用于 prefetch 优化)。
 - `producer_get_barrier`:把当前 stage 的 barrier 指针给 TMA(TMA descriptor 内部要用)。
 
-### 4.4 `PipelineState` 与"双 state"模式
+### 3.4 `PipelineState` 与"双 state"模式
 
 ```cpp
 template <int Stages_>
@@ -112,7 +119,7 @@ struct PipelineState {
 每个 pipeline 实例用**两份 `PipelineState`**——一份 producer 的,一份 consumer 的,初始相位**反相**:
 
 ```cpp
-// Ch5 mainloop §5.3 producer/consumer 主循环的真实代码:
+// Ch4 mainloop §4.3 producer/consumer 主循环的真实代码:
 
 // Producer 起点 state
 PipelineState write_state = make_producer_start_state<MainloopPipeline>();
@@ -131,9 +138,9 @@ PipelineState read_state{};   // {phase=0, index=0} 默认
 
 barrier 的 phase 翻转跟 state 同步——smem stage 上"哪个 phase 算空、哪个算满"严格按 `state.phase()` 决定。
 
-### 4.5 6 个 helper 在 K-loop 里的精确顺序
+### 3.5 6 个 helper 在 K-loop 里的精确顺序
 
-Ch5 / Ch7 会反复用到这一套,这里把骨架抽出来单独讲:
+Ch4 mainloop / Ch5 epilogue / Ch6 kernel orchestrator 会反复用到这一套,这里把骨架抽出来单独讲:
 
 ```cpp
 // 起点
@@ -165,7 +172,7 @@ for (int k_tile = 0; k_tile < K_tiles; ++k_tile) {
 - consumer 在 iteration k 时读的是 iteration k 的 stage;producer 在 iteration k 时写的是 iteration k 的 stage——**两边是同一个 stage**。但时序上 producer acquire 比 consumer release 早 K_loop_pipeline_mmas 个 iteration(典型 2 个),实现 K-loop 流水线。
 - 第一次 iteration 时,producer 已经预先 arrive 了一些 stage(`producer_ahead`);consumer 第一次 wait 等的就是这些 pre-arrived 的 stage。
 
-### 4.6 Stages 怎么选
+### 3.6 Stages 怎么选
 
 `Stages` 决定 smem 上有几个 slot、pipeline 能"预取"几个 tile:
 
@@ -187,7 +194,7 @@ A 和 B 各自一份,smem 总占用 = 2 × Stages × tile_M × tile_K × sizeof(
 
 `Sm90_tma_warpspecialized` 的 dispatch policy 默认 `Stages = 3`(mainloop 文件顶部常量),smem 上 A + B + Stages × tile = 适合典型 128×128×32 tile。
 
-### 4.7 cluster barrier 与 multicast
+### 3.7 cluster barrier 与 multicast
 
 Hopper 引入 **threadblock cluster**——多个 CTA 共享一个 barrier,允许 multicast TMA + cluster 内 CTA 同步。`PipelineTmaAsync` 的 barrier 是 **ClusterBarrier**(不是普通的 NamedBarrier):
 
@@ -205,24 +212,24 @@ mainloop 实际用时,builder 会算:
 
 看 `PipelineTmaAsync::init_barriers` 的逻辑。
 
-### 4.8 sm100 上的 pipeline
+### 3.8 sm100 上的 pipeline
 
 `include/cutlass/pipeline/sm100_pipeline.hpp` 跟 sm90 同构,但 cluster barrier 升级为 **distributed shared memory barrier**(Blackwell 引入)。具体变化:
 
-- `clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128` PTX 指令(Ch9 Sm100 节会详讲 CLC)
+- `clusterlaunchcontrol.try_cancel.async.shared::cta.mbarrier::complete_tx::bytes.multicast::cluster::all.b128` PTX 指令(Ch11 §11.3 详讲 CLC)
 - Distributed shared memory 允许 CTA 直接读其他 CTA 的 smem,**不需要走 gmem**
 
 API 形态跟 sm90 一样,6 个 helper 一一对应,用法不变。
 
-### 4.9 章末:读完这一章你该做得到的事
+### 3.9 章末:读完这一章你该做得到的事
 
-- ✅ 在 Ch5 mainloop / Ch7 epilogue / Ch9 kernel orchestrator 看到 `producer_acquire` / `consumer_wait` 时,知道每个 helper 在改哪个 barrier。
+- ✅ 在 Ch4 mainloop / Ch5 epilogue / Ch6 kernel orchestrator 看到 `producer_acquire` / `consumer_wait` 时,知道每个 helper 在改哪个 barrier。
 - ✅ 明白 `PipelineState` 的 phase 翻转跟 barrier 的 phase 翻转同步;producer / consumer 两份 state 起点反相的意义。
 - ✅ 能解释"TMA 路径上 `producer_commit` 为什么是 NoOp"。
 - ✅ 看懂 `PipelineTmaAsync<Stages>` 的 Stages 参数怎么影响 smem 用量。
 - ✅ 区分 `ClusterBarrier` / `NamedBarrier` / 普通 `mbarrier` 三类 barrier 的可见性范围。
 - ✅ 知道 sm90 / sm100 pipeline 的对应关系。
 
-下一章 Ch5 看 mainloop——`CollectiveMma` 怎么用这一套 pipeline 把 TMA + WGMMA + producer/consumer 编排成一个 K-loop。
+下一章 Ch4 看 mainloop——`CollectiveMma` 怎么用这一套 pipeline 把 TMA + WGMMA + producer/consumer 编排成一个 K-loop。
 
 ---

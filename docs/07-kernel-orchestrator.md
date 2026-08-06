@@ -6,7 +6,38 @@
 
 本章主线:把调度器族**挨个拆开**(每个调度器的内部数据流、`WorkTileInfo` 形状、reduction 机制、swizzle/raster 数学),再回到 kernel orchestrator 那段不变的骨架代码——你会发现,**orchestrator 对所有调度器是一样的**,只有调度器自己知道"下一个 tile 是什么"。
 
-### 8.1 Kernel 类(`GemmUniversal<...>`)的 SFINAE 路由
+### 本章涉及 CUTLASS 源文件
+
+- `include/cutlass/gemm/kernel/sm90_gemm_tma_warpspecialized.hpp` — `GemmUniversal` 主体(operator / Arguments / Params / SharedStorage)
+- `include/cutlass/gemm/kernel/sm90_gemm_warpspecialized.hpp` / `_pingpong.hpp` / `_cooperative.hpp` — kernel 编排层 3 个变体
+- `include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp:40` — `PersistentTileSchedulerSm90`(默认)
+- `include/cutlass/gemm/kernel/sm90_tile_scheduler_stream_k.hpp:49` — `PersistentTileSchedulerSm90StreamK`
+- `include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp:47` — `PersistentTileSchedulerSm90Group`
+- `include/cutlass/gemm/kernel/sm100_tile_scheduler.hpp:59` + `sm100_tile_scheduler.hpp:200` — Sm100 Persistent + DynamicPersistent
+- `include/cutlass/gemm/kernel/sm100_static_tile_scheduler.hpp:298` — `StaticPersistentTileScheduler100`
+- `include/cutlass/gemm/kernel/tile_scheduler.hpp:86-298` — `TileSchedulerSelector` 8 个 partial spec + 5 个 tag(`PersistentScheduler` / `StreamKScheduler` / `GroupScheduler` / `DynamicPersistentScheduler` / `StaticPersistentScheduler`)
+- `include/cutlass/gemm/kernel/static_tile_scheduler.hpp` — `StaticPersistentTileScheduler<Tag>` CRTP 公共模板
+
+### 7.0 本章导航
+
+```text
+§6.1  Kernel 类(GemmUniversal<...>)的 SFINAE 路由       ← 入口
+§6.2  Arguments / Params / SharedStorage                  ← host 端 3 件套
+§6.3  operator()(Params, smem_buf) 入口                   ← device kernel 起点
+§6.4  Producer / Consumer 主循环(俯视)                  ← 6 个 helper 接力
+§6.5  调度器族(6 个调度器,6.5.1-6.5.6)                    ← Persistent / StreamK / Group / Dynamic / Static / sm100 变体
+§6.6  速查表 + 决策树 + 图配                              ← 横向对比 + 实战选型
+§6.7  章末:读完这一章你该做得到的事                       ← 自检 checklist
+```
+
+读法建议:
+
+- **第一次读**:§6.1 → §6.4 一把过,先把 kernel 骨架 + 调度器接口契约装进脑子。
+- **第二次按需**:调度器族对比(§6.5.1-§6.5.6)按你项目里的形状选:大 M×N 走 §6.5.1、K-bound 走 §6.5.2、MoE/grouped 走 §6.5.3、Sm100 走 §6.5.4-§6.5.6。
+- **实战选型**:§6.6.1 决策树 + §6.6 速查表
+- **自检**:§6.7 checklist
+
+### 7.1 Kernel 类(`GemmUniversal<...>`)的 SFINAE 路由
 
 ```cpp
 template <
@@ -29,7 +60,7 @@ class GemmUniversal<
 
 同样的 SFINAE 路由对 TileScheduler 也成立:写 `PersistentScheduler` 就匹配 `Persistent*` 派系;写 `StreamKScheduler` 就匹配 stream-K partial spec;写 `GroupScheduler` 就匹配 grouped-GEMM partial spec。
 
-### 8.2 Arguments / Params / SharedStorage
+### 7.2 Arguments / Params / SharedStorage
 
 ```cpp
 struct Arguments {
@@ -66,7 +97,7 @@ struct SharedStorage {
 
 pattern 你已经熟了: union(主要内存)、pipeline storage(流水线屏障)、scheduler 状态。**`scheduler` 这一块是调度器相关的**——`StaticPersistent` 是 0 字节空 storage;`StreamK` 也基本 0 字节(因为 reduction workspace 走 gmem);**只有 SM100 Persistent 和 Group scheduler 真有 smem 状态**(CLC pipeline + response buffer / producer-consumer pipeline + response buffer)。
 
-### 8.3 `operator()(Params, smem_buf)` 入口
+### 7.3 `operator()(Params, smem_buf)` 入口
 
 ```cpp
 CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
@@ -148,7 +179,7 @@ CUTLASS_DEVICE void operator()(Params const& params, char* smem_buf) {
   - `StreamK`:`k_tile_count` 是本 worker 实际算的 K 子区间长度,**未必等于完整 K**;`k_tile_idx` 是 K 子区间的起点。
   - `Group`:`k_tile_count = ceil(K / tile_K)`,`k_tile_idx = 0`(每个 group 的 K 是独立的)。
 
-### 8.4 Producer / Consumer 主循环(俯视)
+### 7.4 Producer / Consumer 主循环(俯视)
 
 ```text
 [t=0]   Producer 把 K=0  拉入 smem stage 0
@@ -221,7 +252,7 @@ CUTLASS 3.x 把"决定下一个 tile 是哪一个"这件事抽成一个**多态 
 
 下面对每个调度器单独拆。
 
-### 8.5 `PersistentTileSchedulerSm90` —— 静态持久调度的"默认派"
+### 7.5.1 `PersistentTileSchedulerSm90` (默认 tag) —— 静态持久调度的"默认派"
 
 文件:`include/cutlass/gemm/kernel/sm90_tile_scheduler.hpp`(默认)。
 
@@ -324,13 +355,13 @@ struct WorkTileInfo {
 };
 ```
 
-#### 使用场景(以及为什么是默认)
+#### 速查表
 
 - **大 M, 大 N, K 适中**:典型 batch matmul、transformer FFN/attn projection。Tile 多到能填满整个 GPU;每个 SM 上的 persistent CTA 可以**循环摊派 ~ 几十个 tile**,避免"launch 千万个 CTA 的 host overhead"。
 - **当 (tiles_m × tiles_n × tiles_l) ≫ SM_count**:persistent 才有意义;否则根本不需要"一个 CTA 跑多个 tile"。
 - **不适合**:M/N 都小(只有几十个 tile)、K-bound 形状(这时应该用 `StreamK`)。
 
-### 8.6 `StreamKScheduler` —— K 维并行,partial sum 合并
+### 7.5.2 `StreamKScheduler` (K-bound partial sum 合并) —— K 维并行,partial sum 合并
 
 文件:`include/cutlass/gemm/kernel/sm90_tile_scheduler_stream_k.hpp`。
 
@@ -417,7 +448,7 @@ struct WorkTileInfo {
 
 `examples/47_ampere_gemm_universal_streamk/` 是 CUTLASS **2.x** 的 Stream-K 演示(走 `UniversalGemm` + 单独的 reduction kernel)。**跟 3.x 的 `StreamKScheduler` tag 是两套实现**——2.x 走的是 "split-K + post-reduction kernel";3.x 走的是 "K-parallel + 同 kernel 内 atomic reduction"。别混。
 
-### 8.7 `GroupScheduler` —— Grouped GEMM 的多 problem 调度
+### 7.5.3 `GroupScheduler` (Grouped GEMM 多 problem) —— Grouped GEMM 的多 problem 调度
 
 文件:`include/cutlass/gemm/kernel/sm90_tile_scheduler_group.hpp`。
 
@@ -492,7 +523,7 @@ using SharedStorage {
 
 如果所有 group 的形状**完全一样**(`bmm`),用 Persistent + `L_idx = batch_idx` 就够了。GroupScheduler 是给"形状各异"用的。
 
-### 8.8 `DynamicPersistentScheduler` —— Blackwell CLC 动态派工
+### 7.5.4 `DynamicPersistentScheduler` (sm100 CLC 动态) —— Blackwell CLC 动态派工
 
 文件:`include/cutlass/gemm/kernel/sm100_tile_scheduler.hpp`。
 
@@ -569,7 +600,7 @@ CLC 给的是"线性"CTA id,调度器还要做一次 `swizzle_and_rasterize`(跟
 - **代价**:CLC query 一次 ~100ns;每个 tile 多一份 smem storage(`Stages × 16B`)和 `clusterlaunchcontrol.query_cancel` 的 inline asm。Stages 太小会 stall,太大费 smem。
 - **不适合**:超大批量(Static persistent + 充足预分配更省事)、不需要"避让其他 kernel"。
 
-### 8.9 `StaticPersistentScheduler` —— Sm100 上的"轻量版"
+### 7.5.5 `StaticPersistentScheduler` (sm100 轻量版) —— Sm100 上的"轻量版"
 
 文件:`include/cutlass/gemm/kernel/sm100_static_tile_scheduler.hpp`。
 
@@ -587,7 +618,7 @@ CLC 给的是"线性"CTA id,调度器还要做一次 `swizzle_and_rasterize`(跟
 - **想用 Sm100 的 swizzle/raster + Sm90 的固定 grid**:典型——新 kernel 没在并发场景跑,但希望 schema 跟 DynamicPersistent 兼容。
 - **默认场景**:sm100 的 `PersistentScheduler` 实际**默认**走的就是 `StaticPersistentScheduler100`(看 `tile_scheduler.hpp` 里 `TileSchedulerSelector<StaticPersistentScheduler, arch::Sm100, ...>` 派 `StaticPersistentTileScheduler100`)——只有 `DynamicPersistentScheduler` 才真正用 CLC。
 
-### 8.10 sm100 上的 `StreamKScheduler` 与 `GroupScheduler`
+### 7.5.6 sm100 上的 `StreamKScheduler` 与 `GroupScheduler`
 
 Sm100 版的 stream-K 与 group **包了一层 CLC dynamic 派工**:
 
@@ -609,7 +640,7 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 - **跟 Sm90 stream-K 一样的 K-bound 形状**,但 GPU 上同时跑别的 kernel —— Sm100 版的 CLC 让你的 stream-K worker 不跟别 kernel 抢 SM。
 - **跟 Sm90 group 一样的 MoE / variable-length**,但希望 Sm100 的 dynamic 派工特性——典型 inference 的 expert dispatch。
 
-### 8.11 调度器族速查表
+### 7.6 速查表 + 决策树 + 图配(合并段)
 
 | Tag | 文件 | 何时用 | 数学梗概 | Reduction 怎么走 |
 |---|---|---|---|---|
@@ -619,9 +650,9 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 | `StreamKScheduler` (sm90 / 100) | `sm90_tile_scheduler_stream_k.hpp` / `sm100_tile_scheduler_stream_k.hpp` | K-bound 形状(M/N 小,K 大);`Heuristic` 自动挑 mode | K-parallel:每个 worker 算一段 K 子区间;partial → gmem workspace → atomic-reduce | gmem workspace + `BlockStripedReduce` + `NamedBarrier` |
 | `GroupScheduler` (sm90 / 100) | `sm90_tile_scheduler_group.hpp` / `sm100_tile_scheduler_group.hpp` | Grouped GEMM:多组 M/N/K 不同(如 MoE、variable-length) | Warp-scan 32 lane 一次定位 group;`L_idx` 复用存 group id | 不需要(每个 group 的 K 是独立的) |
 
-每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 Ch7.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
+每种都暴露同名 `fetch_next_work` 接口(以及 sm100 CLC 用的 `advance_to_next_work`),所以 §6.3 的 kernel orchestrator 代码**完全不动**,只换 scheduler tag 就能切。
 
-### 8.12 选哪个调度器——决策树
+### 7.6.1 选哪个调度器——决策树
 
 把 §6.5-§6.10 的"什么时候用"折成决策树:
 
@@ -650,15 +681,15 @@ Sm100 版的 stream-K 用 Sm90 的 `assign_work` / `get_current_work_iter_start_
 | `reduction_mode`(stream-K) | `arguments.scheduler.reduction_mode` | `Deterministic` / `NonDeterministic` |
 | `decomposition_mode`(stream-K) | `arguments.scheduler.decomposition_mode` | `Heuristic` / `DataParallel` / `SplitK` |
 
-### 8.13 图配
 
-持久 / 非持久调度的对照图(配 Ch7.5 / Ch7.8):
+
+持久 / 非持久调度的对照图(配 §6.5.1 / §6.5.4):
 
 ![persistent_static](../media/images/persistent_static.png)
 
 ![non_persistent](../media/images/non_persistent.png)
 
-### 8.14 章末:读完这一章你该做得到的事
+### 7.7 章末:读完这一章你该做得到的事
 
 - ✅ 在 kernel 入口看到 `WarpGroupRole { Producer, Consumer }`、`ProducerWarpRole`、`persistent_scheduler.fetch_next_work(...)` 这些,认得出各自在做什么。
 - ✅ 能口述"6 个 helper 在 producer / consumer 主循环里按什么顺序被调用"。
